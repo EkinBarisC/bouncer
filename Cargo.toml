@@ -1,0 +1,30 @@
+[package]
+name = "bouncer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+description = "Headless input debouncer for Windows — suppresses keyboard & mouse chatter"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/EkinBarisC/bouncer"
+publish = false
+
+# Library + thin binary: the library holds all logic so unit and integration
+# tests exercise the real public API (see ADR-0001 and DESIGN.md §9).
+[lib]
+name = "bouncer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bouncer"
+path = "src/main.rs"
+
+[dependencies]
+# Intentionally empty for now. Heavy/risky deps are introduced with the slice
+# that needs them: `windows` at the keyboard backend (#7), egui at the UI (#10),
+# serde/toml at config (#6), proptest at the engine property test (#5).
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
