@@ -120,6 +120,32 @@ Bouncer is **two threads** plus a **pure core**, following functional-core / imp
   • Injected events (LLKHF_INJECTED) pass straight through in production.
 ```
 
+### Core/shell boundary (see ADR-0001)
+
+All decision logic is a single **pure `Engine`** on the hook thread, called synchronously from
+the hook callback. The shell is dumb glue; presentation state lives on the UI side; threads talk
+only over `Command`/`Report` channels (never a shared lock).
+
+```
+Engine::on_event(event: InputEvent) -> Outcome { verdict: Pass | Suppress, mode_change: Option<Mode> }
+    Engine owns: Debouncer (per-key release-anchored state) + PanicDetector (combo match) + Mode.
+    Pure: no OS, no clock (timestamp arrives on the event), no I/O → fully unit-testable.
+
+trait HookBackend {
+    fn run(self, engine: Engine,
+           commands: Receiver<Command>,
+           reports:  Sender<Report>) -> Result<()>;   // blocks; runs OS message loop until Shutdown
+}
+
+Command  (UI → hook thread): SetThresholds | SetMode | SetDiagnostic | RebindPanic | Shutdown
+Report   (hook thread → UI): Suppressed { device, key, gap_ms } | ModeChanged(Mode)
+                             | HookEvicted | HookReinstalled
+```
+
+The counter, diagnostic ring buffer, and histogram are **UI-side state** built from the `Report`
+stream — not in the Engine. Only `windows.rs` knows `WH_*_LL`, virtual-key codes, and the
+`PostThreadMessageW` that wakes the blocking `GetMessage` loop when a `Command` arrives.
+
 ### Module layout (proposed)
 
 ```
@@ -127,24 +153,59 @@ bouncer/
 ├── Cargo.toml
 ├── DESIGN.md                 ← this file
 ├── README.md
+├── CONTEXT.md                ← glossary (canonical domain terms)
+├── docs/adr/                 ← architecture decision records
 ├── .github/workflows/ci.yml  ← fmt --check, clippy -D warnings, tests
 ├── deny.toml                 ← cargo-deny config
 └── src/
-    ├── main.rs               ← wiring: spawn hook thread + UI thread, single-instance mutex
+    ├── main.rs               ← wiring: single-instance mutex, spawn hook + UI threads, channels
     ├── core/                 ← PURE, no OS, fully unit-tested
     │   ├── mod.rs
-    │   ├── debouncer.rs       ← decide(event) -> Verdict ; per-key release-anchored state
+    │   ├── engine.rs          ← Engine::on_event(event) -> Outcome ; owns Debouncer+PanicDetector+Mode
+    │   ├── debouncer.rs       ← per-key release-anchored chatter decision
+    │   ├── panic.rs           ← PanicDetector: matches configured combo against live key state
     │   ├── event.rs           ← InputEvent { device, code, kind, timestamp_ms }
-    │   └── verdict.rs         ← Verdict::{Pass, Suppress}
+    │   ├── mode.rs            ← Mode::{Active, Paused, Panic}
+    │   └── verdict.rs         ← Verdict::{Pass, Suppress}, Outcome
+    ├── messages.rs           ← Command / Report enums (platform-agnostic)
     ├── config.rs             ← TOML load/save, defaults, clamp
-    ├── stats.rs              ← in-memory counter + diagnostic ring buffer
-    ├── platform/             ← imperative shell, per-OS behind a trait
-    │   ├── mod.rs             ← trait HookBackend { install, uninstall, set_paused, ... }
-    │   └── windows.rs         ← WH_KEYBOARD_LL / WH_MOUSE_LL impl + eviction watchdog
+    ├── stats.rs              ← UI-side: counter + diagnostic ring buffer + histogram (from Reports)
+    ├── platform/             ← imperative shell, per-OS behind HookBackend
+    │   ├── mod.rs             ← trait HookBackend
+    │   └── windows.rs         ← WH_KEYBOARD_LL / WH_MOUSE_LL impl + eviction watchdog + msg loop
     └── ui/
         ├── tray.rs
         └── settings.rs        ← egui window
 ```
+
+### Tray surface
+
+The tray is a projection of the Mode enum + diagnostic overlay.
+
+- **Four visual states:** Active (normal/colored), Active+Diagnostic (normal + recording badge —
+  diagnostic must always be visibly indicated), Paused (greyed/muted), Panic (red/alert).
+- **Click behavior:** left-click → open Settings window; right-click → context menu.
+- **Context menu (state-aware):** Pause/Resume (label flips with Mode; in Panic it clears Panic),
+  Diagnostic mode (checkable; greyed while Paused), Settings…, Quit.
+- **Tooltip = live status line:** Mode + session counter, and in non-Active modes how to recover,
+  e.g. `Bouncer — PANIC (pass-through) · press Ctrl+Alt+Shift+F12 to resume`.
+- **Quit confirmation:** "Quit Bouncer? Chatter protection will stop." with a **"Don't ask again"**
+  checkbox (persisted as `confirm_on_quit`). Default: ask.
+
+### Settings window (egui)
+
+One small (~420px), non-modal, resizable window; opening it never changes Mode. Four labeled
+groups top-to-bottom (no in-app trust banner — that lives in the README):
+
+- **Status** — colored dot for current Mode + primary **Pause/Resume** button; live session
+  suppressed counts (keyboard · mouse), fed from the `Report` stream.
+- **Tuning** — per device class: an enable checkbox (`debounce_keyboard` / `debounce_mouse`) + a
+  0–100 ms slider with the numeric `ms` value shown.
+- **Diagnostics** — Diagnostic-mode toggle (greyed while Paused; shows expiry countdown when on);
+  a **histogram of suppression gaps with a vertical line marking the current threshold** (makes
+  calibration visual); a **Clear** button.
+- **Settings** — Start-on-login checkbox; Panic-hotkey display + **Rebind** (capture state that
+  validates ≥1 modifier + 1 key before accepting); Confirm-on-quit checkbox.
 
 ---
 
@@ -181,9 +242,13 @@ Invariants (each a test):
 
 ## 6. Safety (defense-in-depth)
 
-1. **Global panic hotkey** → engine flips to full pass-through (hooks stay installed, every
-   event passes). Checked **first** in the hot path. Default: an obscure-but-memorable combo,
-   **rebindable**. Keyboard-based (never depends on the mouse, since mouse may be the bug).
+1. **Global panic hotkey** → Engine flips to **Panic** Mode (full pass-through; hooks stay
+   installed, every event passes). Checked **first** in the hot path. Default
+   **`Ctrl+Alt+Shift+F12`** (universal keys — no Pause/ScrollLock that laptops lack), rebindable.
+   Detection is a **simultaneous chord**, **edge-triggered** (flips once per chord, not while
+   held), and the triggering events are **consumed** (not leaked to the foreground app). Rebinds
+   are validated to require ≥1 modifier + 1 non-modifier key. Keyboard-based (never depends on
+   the mouse, since the mouse may be the bug).
 2. **Fail-open invariant** — suppress only when *certain*; any doubt/error → Pass. Tested.
 3. **Hook-eviction detection + auto-reinstall** — if Windows drops a slow/evicted hook, detect
    and reinstall; never silently die.
@@ -229,7 +294,8 @@ enabled               = true # false = paused (pass-through)
 debounce_keyboard     = true
 debounce_mouse        = true
 autostart             = true
-panic_hotkey          = "Ctrl+Alt+Shift+Pause"  # rebindable
+panic_hotkey          = "Ctrl+Alt+Shift+F12"    # rebindable; ≥1 modifier + 1 key
+confirm_on_quit       = true                    # "Don't ask again" clears this
 ```
 
 Defensive load: missing/corrupt/partial file → safe defaults (and rewrite a clean file);
@@ -274,10 +340,24 @@ unknown keys ignored; missing keys defaulted; clamps applied on load. UI changes
 
 ---
 
-## 12. Open / soft areas (candidates for further grilling)
+## 12. v1 roadmap (milestones)
 
-- Exact egui settings-window layout.
-- Precise cross-platform `HookBackend` trait shape (what the shell must expose).
-- Default panic-hotkey combo (currently a placeholder `Ctrl+Alt+Shift+Pause`).
-- Tray icon states (enabled vs paused vs diagnostic-active) and tooltip content.
-- v1 task breakdown / milestone ordering for implementation.
+Vertical-slice ordering. The hook is the riskiest unknown, so a throwaway spike de-risks it
+*before* the core is built around assumptions.
+
+| # | Milestone | Goal / exit criteria |
+|---|-----------|----------------------|
+| **Spike-0** | Hook proof (throwaway) | Minimal `WH_KEYBOARD_LL` that suppresses every 2nd press of one key — *prove* install + return-1 + actual swallow works on Win11. Discarded after. |
+| **M1** | Scaffolding | Cargo project, module skeleton, CI (fmt-check + clippy `-D warnings` + tests), `deny.toml`. Core types compile. |
+| **M2** | Pure core (TDD) | `Debouncer`, `PanicDetector`, `Mode` gating, `Engine::on_event`, fully unit-tested incl. fail-open property test. **Zero OS code.** |
+| **M3** | Windows keyboard backend | `HookBackend` + `windows.rs`: real `WH_KEYBOARD_LL` → Engine, `Command`/`Report` channels, `PostThreadMessageW` wake. Headless, threshold hardcoded. `SendInput` integration test proves end-to-end suppression. |
+| **M4** | Mouse backend | Add `WH_MOUSE_LL` (double-click-bug) through the same path. |
+| **M5** | Tray + Mode control | Tray icon (4 states), menu, Pause/Resume, Quit confirm, panic hotkey end-to-end (chord → consume → toggle Panic). |
+| **M6** | Settings window + config | egui layout, TOML load/save (defensive + clamp), live-apply over channels, autostart-on-login, rebind capture. |
+| **M7** | Diagnostics | Ring buffer, gap histogram, diagnostic toggle + 1 hr auto-expire. |
+| **M8** | Hardening | Eviction watchdog + reinstall, single-instance mutex, defensive config edge cases, fail-open audit. |
+| **M9** | Packaging | Portable release `.exe`, GitHub Release + SHA256, README finalize, pick a license. |
+
+> All design soft areas from the initial grilling are now resolved (state model, core/shell
+> boundary [ADR-0001], panic hotkey, tray surface, settings layout, roadmap). See `CONTEXT.md`
+> for the glossary and `docs/adr/` for recorded decisions.

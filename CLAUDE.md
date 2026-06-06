@@ -1,0 +1,1 @@
+When you are writing tests in a TDD approach with red green refactor loops etc. first write tests, after that wait for my confirmation prompt. i will evaluate and review these tests for their correctness. and then continue with the loop after my approval.
