@@ -14,5 +14,5 @@ pub use debouncer::{Debouncer, Thresholds};
 pub use engine::Engine;
 pub use event::{Device, EventKind, InputEvent, KeyId};
 pub use mode::Mode;
-pub use panic::PanicDetector;
+pub use panic::{ChordError, PanicChord, PanicDetector, PanicReaction};
 pub use verdict::{Outcome, Verdict};
