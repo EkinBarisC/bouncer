@@ -5,8 +5,10 @@
 //! (plus which keys are mid-suppressed-press, so a suppressed down's paired up is
 //! also discarded). See DESIGN.md §5 and CONTEXT.md ("release-anchored").
 
+use std::collections::{HashMap, HashSet};
+
 use crate::config::MAX_THRESHOLD_MS;
-use crate::core::event::{Device, InputEvent};
+use crate::core::event::{Device, EventKind, InputEvent, KeyId};
 use crate::core::verdict::Verdict;
 
 /// The active per-device-class thresholds (milliseconds). A down arriving *less
@@ -33,8 +35,12 @@ impl Thresholds {
 /// or legitimate input to `Pass`.
 #[derive(Debug, Default)]
 pub struct Debouncer {
-    // Fields are introduced during the GREEN step (after test review):
-    // last release time per key, and the set of keys whose down was suppressed.
+    /// Timestamp of the last release (up) seen for each key. The chatter window is
+    /// measured from here (release-anchored).
+    last_up: HashMap<KeyId, u64>,
+    /// Keys whose down was suppressed and whose paired up must also be discarded,
+    /// so no orphan up reaches downstream applications.
+    suppressing: HashSet<KeyId>,
 }
 
 impl Debouncer {
@@ -46,9 +52,29 @@ impl Debouncer {
     /// per-key timing state. Pure otherwise — no clock, no OS (the timestamp is
     /// carried on `event`).
     pub fn decide(&mut self, event: InputEvent, thresholds: Thresholds) -> Verdict {
-        // RED: implementation deferred until the tests below are reviewed (#3).
-        let _ = (event, thresholds);
-        unimplemented!("Debouncer::decide — implemented after test review (#3)")
+        match event.kind {
+            EventKind::Up => {
+                // If this up pairs with a suppressed down, discard it too.
+                if self.suppressing.remove(&event.key) {
+                    return Verdict::Suppress;
+                }
+                self.last_up.insert(event.key, event.timestamp_ms);
+                Verdict::Pass
+            }
+            EventKind::Down => {
+                let threshold = thresholds.for_device(event.device);
+                if let Some(&last_up) = self.last_up.get(&event.key) {
+                    let gap = event.timestamp_ms.saturating_sub(last_up);
+                    if gap < threshold {
+                        // Chatter: re-press faster than humanly possible. Suppress
+                        // this down and mark the key so its paired up is dropped.
+                        self.suppressing.insert(event.key);
+                        return Verdict::Suppress;
+                    }
+                }
+                Verdict::Pass
+            }
+        }
     }
 }
 
