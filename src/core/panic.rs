@@ -5,7 +5,17 @@
 //! also reports whether the event should be **consumed** (not leaked to the
 //! foreground app). See DESIGN.md §6 and CONTEXT.md ("panic hotkey").
 
-use crate::core::event::InputEvent;
+use std::collections::{BTreeSet, HashSet};
+
+use crate::core::event::{InputEvent, KeyId};
+
+/// True for Ctrl/Alt/Shift/Win virtual-key codes.
+///
+/// `0x10..=0x12` are generic Shift/Control/Alt; `0xA0..=0xA5` their left/right
+/// variants; `0x5B`/`0x5C` are left/right Win.
+fn is_modifier(key: KeyId) -> bool {
+    matches!(key, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5)
+}
 
 /// Why a proposed chord is invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,20 +31,28 @@ pub enum ChordError {
 /// so a chord can't be something triggerable by normal use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PanicChord {
-    // Real field (the key set) is introduced during the GREEN step.
+    keys: BTreeSet<KeyId>,
 }
 
 impl PanicChord {
-    /// Validate and build a chord from its keys.
-    pub fn new(keys: &[crate::core::event::KeyId]) -> Result<Self, ChordError> {
-        let _ = keys;
-        unimplemented!("PanicChord::new — implemented after test review (#4)")
+    /// Validate and build a chord from its keys. Requires at least one modifier
+    /// and at least one non-modifier key.
+    pub fn new(keys: &[KeyId]) -> Result<Self, ChordError> {
+        let keys: BTreeSet<KeyId> = keys.iter().copied().collect();
+        if !keys.iter().any(|&k| is_modifier(k)) {
+            return Err(ChordError::NoModifier);
+        }
+        if !keys.iter().any(|&k| !is_modifier(k)) {
+            return Err(ChordError::NoNonModifierKey);
+        }
+        Ok(Self { keys })
     }
 
     /// The default chord: Ctrl+Alt+Shift+F12 (universal keys; no Pause/ScrollLock
     /// that some keyboards lack). L/R modifier vk resolution is handled at wiring (#9).
     pub fn default_chord() -> Self {
-        unimplemented!("PanicChord::default_chord — implemented after test review (#4)")
+        // 0x11 Ctrl, 0x12 Alt, 0x10 Shift, 0x7B F12.
+        Self::new(&[0x11, 0x12, 0x10, 0x7B]).expect("default chord is valid")
     }
 }
 
@@ -50,20 +68,40 @@ pub struct PanicReaction {
 /// Tracks held keys and emits an edge-triggered toggle when the chord completes.
 #[derive(Debug)]
 pub struct PanicDetector {
-    // Implementation (held-key set, configured chord, edge state) is introduced
-    // during the GREEN step.
+    chord: PanicChord,
+    held: HashSet<KeyId>,
+    /// Whether the chord was fully held after the previous event (edge state).
+    was_full: bool,
 }
 
 impl PanicDetector {
     pub fn new(chord: PanicChord) -> Self {
-        let _ = chord;
-        unimplemented!("PanicDetector::new — implemented after test review (#4)")
+        Self {
+            chord,
+            held: HashSet::new(),
+            was_full: false,
+        }
     }
 
     /// Feed one event; update the held-key set and report toggle/consume.
     pub fn on_event(&mut self, event: InputEvent) -> PanicReaction {
-        let _ = event;
-        unimplemented!("PanicDetector::on_event — implemented after test review (#4)")
+        match event.kind {
+            crate::core::event::EventKind::Down => {
+                self.held.insert(event.key);
+            }
+            crate::core::event::EventKind::Up => {
+                self.held.remove(&event.key);
+            }
+        }
+
+        let full = self.chord.keys.iter().all(|k| self.held.contains(k));
+        let toggled = full && !self.was_full; // rising edge only
+        self.was_full = full;
+
+        PanicReaction {
+            toggled,
+            consume: full,
+        }
     }
 }
 
