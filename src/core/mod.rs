@@ -10,7 +10,7 @@ pub mod mode;
 pub mod panic;
 pub mod verdict;
 
-pub use debouncer::Debouncer;
+pub use debouncer::{Debouncer, Thresholds};
 pub use engine::Engine;
 pub use event::{Device, EventKind, InputEvent, KeyId};
 pub use mode::Mode;
