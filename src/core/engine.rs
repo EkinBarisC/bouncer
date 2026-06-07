@@ -1,14 +1,11 @@
 //! The pure decision engine: composes `Debouncer` + `PanicDetector` + `Mode` into
 //! one synchronous `on_event` call (per ADR-0001).
-//!
-//! Behavior is added test-first in issue #5 — the tests below are committed RED;
-//! `set_mode` / `on_event` are implemented to GREEN after test review.
 
 use crate::core::debouncer::{Debouncer, Thresholds};
 use crate::core::event::InputEvent;
 use crate::core::mode::Mode;
 use crate::core::panic::PanicDetector;
-use crate::core::verdict::Outcome;
+use crate::core::verdict::{Outcome, Verdict};
 
 /// Owns all decision state. Lives on the hook thread; called synchronously from
 /// the hook callback. Pure — no OS, no clock, no I/O.
@@ -42,19 +39,47 @@ impl Engine {
     }
 
     /// Set the primary `Mode`. The shell calls this on a `SetMode` command —
-    /// Pause/Resume, or clearing Panic. Implemented to GREEN after test review (#5).
+    /// Pause/Resume, or clearing Panic.
     pub fn set_mode(&mut self, mode: Mode) {
-        let _ = mode;
-        unimplemented!("Engine::set_mode — implemented after test review (#5)")
+        self.mode = mode;
     }
 
-    /// The single synchronous decision for one input event: the panic chord is
-    /// detected in every Mode; while `Active` the verdict delegates to the
-    /// `Debouncer`; while `Paused`/`Panic` every (non-chord) event passes.
-    /// Implemented to GREEN after test review (#5).
+    /// The single synchronous decision for one input event.
+    ///
+    /// The `PanicDetector` observes *every* event (it must track held keys to see
+    /// the chord) regardless of Mode, and toggles `Panic` on the chord's rising
+    /// edge. The chord's own keys are always consumed so the hotkey never leaks to
+    /// the foreground app. Otherwise the verdict is Mode-gated: while `Active` it
+    /// delegates to the `Debouncer`; while `Paused`/`Panic` every event passes
+    /// (the fail-open, always-recoverable invariant).
     pub fn on_event(&mut self, event: InputEvent) -> Outcome {
-        let _ = event;
-        unimplemented!("Engine::on_event — implemented after test review (#5)")
+        let reaction = self.panic.on_event(event);
+
+        let mode_change = if reaction.toggled {
+            let next = if self.mode == Mode::Panic {
+                Mode::Active
+            } else {
+                Mode::Panic
+            };
+            self.mode = next;
+            Some(next)
+        } else {
+            None
+        };
+
+        let verdict = if reaction.consume {
+            Verdict::Suppress
+        } else {
+            match self.mode {
+                Mode::Active => self.debouncer.decide(event, self.thresholds),
+                Mode::Paused | Mode::Panic => Verdict::Pass,
+            }
+        };
+
+        Outcome {
+            verdict,
+            mode_change,
+        }
     }
 }
 
