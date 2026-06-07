@@ -3,11 +3,13 @@
 //! This is only the type + safe defaults. TOML (de)serialization, defensive load,
 //! and clamping are added test-first in issue #6.
 
+use serde::{Deserialize, Serialize};
+
 /// The hard cap applied to both thresholds, so a hand-edited config can't turn
 /// Bouncer into an input black hole (DESIGN.md §6, §8).
 pub const MAX_THRESHOLD_MS: u8 = 100;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Config {
     pub keyboard_threshold_ms: u8,
     pub mouse_threshold_ms: u8,
@@ -41,14 +43,45 @@ impl Config {
     /// partial, or empty input falls back to defaults for the affected fields,
     /// unknown keys are ignored, and thresholds are clamped to `MAX_THRESHOLD_MS`.
     pub fn load_from_str(toml: &str) -> Config {
-        let _ = toml;
-        unimplemented!("Config::load_from_str — implemented after test review (#6)")
+        let raw: RawConfig = toml::from_str(toml).unwrap_or_default();
+        let d = Config::default();
+        Config {
+            keyboard_threshold_ms: raw
+                .keyboard_threshold_ms
+                .unwrap_or(d.keyboard_threshold_ms)
+                .min(MAX_THRESHOLD_MS),
+            mouse_threshold_ms: raw
+                .mouse_threshold_ms
+                .unwrap_or(d.mouse_threshold_ms)
+                .min(MAX_THRESHOLD_MS),
+            enabled: raw.enabled.unwrap_or(d.enabled),
+            debounce_keyboard: raw.debounce_keyboard.unwrap_or(d.debounce_keyboard),
+            debounce_mouse: raw.debounce_mouse.unwrap_or(d.debounce_mouse),
+            autostart: raw.autostart.unwrap_or(d.autostart),
+            panic_hotkey: raw.panic_hotkey.unwrap_or(d.panic_hotkey),
+            confirm_on_quit: raw.confirm_on_quit.unwrap_or(d.confirm_on_quit),
+        }
     }
 
     /// Serialize to a TOML string suitable for writing to disk.
     pub fn to_toml_string(&self) -> String {
-        unimplemented!("Config::to_toml_string — implemented after test review (#6)")
+        toml::to_string(self).expect("Config is always serializable")
     }
+}
+
+/// On-disk shape: every field optional so a partial or unknown-key-laden file
+/// parses cleanly, with missing fields backfilled from defaults in `load_from_str`.
+/// `serde` ignores unknown keys by default, satisfying forward-compatibility.
+#[derive(Default, Deserialize)]
+struct RawConfig {
+    keyboard_threshold_ms: Option<u8>,
+    mouse_threshold_ms: Option<u8>,
+    enabled: Option<bool>,
+    debounce_keyboard: Option<bool>,
+    debounce_mouse: Option<bool>,
+    autostart: Option<bool>,
+    panic_hotkey: Option<String>,
+    confirm_on_quit: Option<bool>,
 }
 
 #[cfg(test)]
