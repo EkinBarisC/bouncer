@@ -52,6 +52,24 @@ pub struct ObservedKey {
     pub down: bool,
 }
 
+/// One scripted synthetic mouse-button event to inject. `button` is a mouse vk
+/// (1 = left, 2 = right, 4 = middle, 5/6 = X1/X2).
+#[derive(Debug, Clone, Copy)]
+pub struct MouseClick {
+    pub button: u16,
+    /// `true` = button-down, `false` = button-up.
+    pub down: bool,
+    /// Delay before injecting this event, measured from the previous one (ms).
+    pub gap_ms: u64,
+}
+
+/// A mouse-button event seen downstream — i.e. one Bouncer did **not** suppress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObservedClick {
+    pub button: u16,
+    pub down: bool,
+}
+
 thread_local! {
     static OBSERVER: RefCell<Option<Sender<ObservedKey>>> = const { RefCell::new(None) };
 }
@@ -166,6 +184,13 @@ pub fn run_keyboard_e2e(thresholds: Thresholds, script: &[SynthKey]) -> Vec<Obse
     let _ = hook_thread.join();
 
     obs_rx.try_iter().collect()
+}
+
+/// Run a live Bouncer mouse hook in integration-test mode, replay `script` via
+/// `SendInput`, and return the button events that reached downstream, in order.
+pub fn run_mouse_e2e(thresholds: Thresholds, script: &[MouseClick]) -> Vec<ObservedClick> {
+    let _ = (thresholds, script);
+    todo!("mouse WH_MOUSE_LL backend + SendInput replay — issue #8 GREEN")
 }
 
 /// Inject one synthetic key event via `SendInput` (flagged injected by the OS).
