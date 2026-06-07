@@ -114,32 +114,7 @@ impl Default for PanicDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::event::{Device, EventKind, InputEvent, KeyId};
-
-    const CTRL: KeyId = 0x11;
-    const ALT: KeyId = 0x12;
-    const SHIFT: KeyId = 0x10;
-    const F12: KeyId = 0x7B;
-    const A: KeyId = 0x41;
-
-    fn down(key: KeyId, t: u64) -> InputEvent {
-        InputEvent {
-            device: Device::Keyboard,
-            key,
-            kind: EventKind::Down,
-            timestamp_ms: t,
-            injected: false,
-        }
-    }
-    fn up(key: KeyId, t: u64) -> InputEvent {
-        InputEvent {
-            device: Device::Keyboard,
-            key,
-            kind: EventKind::Up,
-            timestamp_ms: t,
-            injected: false,
-        }
-    }
+    use crate::core::test_util::{down, up, A, ALT, CTRL, F12, SHIFT};
 
     fn detector() -> PanicDetector {
         PanicDetector::new(PanicChord::new(&[CTRL, ALT, SHIFT, F12]).unwrap())

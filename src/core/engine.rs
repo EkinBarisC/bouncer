@@ -86,32 +86,11 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::event::{Device, EventKind, InputEvent, KeyId};
+    use crate::core::event::{Device, EventKind, InputEvent};
     use crate::core::mode::Mode;
+    use crate::core::test_util::{down, up, A, ALT, CTRL, F12, SHIFT};
     use crate::core::verdict::Verdict;
     use proptest::prelude::*;
-
-    const A: KeyId = 0x41; // 'A' — a normal, non-modifier key
-    const CTRL: KeyId = 0x11;
-    const ALT: KeyId = 0x12;
-    const SHIFT: KeyId = 0x10;
-    const F12: KeyId = 0x7B; // completing key of the default chord
-
-    fn kbd(key: KeyId, kind: EventKind, t: u64) -> InputEvent {
-        InputEvent {
-            device: Device::Keyboard,
-            key,
-            kind,
-            timestamp_ms: t,
-            injected: false,
-        }
-    }
-    fn down(key: KeyId, t: u64) -> InputEvent {
-        kbd(key, EventKind::Down, t)
-    }
-    fn up(key: KeyId, t: u64) -> InputEvent {
-        kbd(key, EventKind::Up, t)
-    }
 
     /// Press the full default chord (Ctrl+Alt+Shift+F12); return the outcome of
     /// the completing (F12) event, which is where the toggle fires.
