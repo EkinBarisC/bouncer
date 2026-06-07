@@ -70,6 +70,33 @@ simultaneously; edge-triggered (flips once per chord, not while held); its trigg
 suppressed so they don't leak to the foreground app. Rebinds must include at least one modifier
 plus one non-modifier key.
 
+### Decision pipeline
+
+**Engine**:
+The single pure decision unit. Composes the `Debouncer` + `PanicDetector` + the current `Mode`
+into one synchronous call, `on_event(InputEvent) -> Outcome`, invoked from the hook callback.
+Holds all decision state; has no OS, clock, or I/O (the timestamp arrives on the event). See
+`docs/adr/0001`.
+
+**Verdict**:
+What to do with one event: `Pass` or `Suppress`. The shell maps `Suppress` to "swallow" (return 1
+from the hook) and `Pass` to "let through" (return 0).
+
+**Outcome**:
+The result of one `Engine::on_event`: the event's `Verdict` plus an optional `mode_change` (e.g.
+the panic chord toggling `Panic`). The shell uses `mode_change` to update the tray and emit a
+`ModeChanged` report.
+
+**Mode gating**:
+The rule the Engine applies on top of the Debouncer: while **Active** it delegates to the
+Debouncer; while **Paused** or **Panic** every event passes (nothing suppressed). The panic chord
+is honoured in every Mode and toggles `Panic`.
+
+**Fail-open**:
+The inviolable safety invariant: any state the Engine cannot positively classify as chatter
+resolves to `Pass`, and `on_event` must never panic. A bug must never be able to lock the user
+out of their own input (DESIGN.md §6, D8).
+
 ## Example dialogue
 
 > **Dev:** When the user hits the panic hotkey, do we tear down the hooks?
@@ -87,3 +114,31 @@ plus one non-modifier key.
 >
 > **Domain:** Diagnostic only records **suppressed** events, and Paused suppresses nothing, so
 > there's nothing to record. Diagnostic is an overlay on **Active** — it's dormant while Paused.
+
+## Build status
+
+How we build: **TDD, one issue → one branch → one PR.** Each slice lands as a RED `test:` commit
+(reviewed before implementation) then a GREEN `feat:` commit; the maintainer merges. Heavy deps
+are introduced only by the slice that needs them. Roadmap and milestones live in DESIGN.md §12 and
+the GitHub issues.
+
+Merged (pure core is essentially complete):
+
+- **#1 Spike** — `WH_KEYBOARD_LL` no-driver hook proof, validated on real hardware (closed).
+- **#2 Scaffolding** — lib+bin skeleton, core types, CI (fmt/clippy/test), `deny.toml`.
+- **#3 Debouncer** — per-key, release-anchored chatter decision (`core/debouncer.rs`).
+- **#4 PanicDetector** — edge-triggered chord detection + rebind validation (`core/panic.rs`).
+- **#6 Config** — defensive TOML load/save with defaults + threshold clamp (`config.rs`); adds
+  `serde` + `toml`.
+- **CLAUDE.md** — behavioral coding guidelines for contributors.
+
+In flight:
+
+- **#5 Engine** — composes Debouncer + PanicDetector + Mode into `Engine::on_event`, with the
+  fail-open property test (`proptest`). The last pure-core slice.
+
+Next up:
+
+- **#7 Windows keyboard backend** — first real end-to-end suppression via `WH_KEYBOARD_LL` +
+  a `SendInput`-driven integration test; introduces the `windows` crate. Then the mouse backend,
+  the channel wiring (`Command`/`Report`), tray, and egui settings window.
