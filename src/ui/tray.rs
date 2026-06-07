@@ -159,6 +159,38 @@ impl TrayModel {
     }
 }
 
+/// The side length, in pixels, of the generated tray icon.
+pub const ICON_SIZE: u32 = 32;
+
+/// Generate the raw RGBA pixels for an icon state — a flat colour fill (teal =
+/// Active, grey = Paused, red = Panic) with a small red "recording" dot in the
+/// corner for the diagnostic badge. Returned as `ICON_SIZE × ICON_SIZE` RGBA8 for
+/// `tray_icon::Icon::from_rgba`. Pure, so the colour mapping is unit-testable; the
+/// art is deliberately minimal (refine later).
+pub fn icon_rgba(state: IconState) -> Vec<u8> {
+    let (r, g, b) = match state {
+        IconState::Active | IconState::ActiveDiagnostic => (0x00, 0xA0, 0x82),
+        IconState::Paused => (0x80, 0x80, 0x80),
+        IconState::Panic => (0xD2, 0x28, 0x28),
+    };
+    let size = ICON_SIZE as i32;
+    let mut buf = Vec::with_capacity((ICON_SIZE * ICON_SIZE * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let mut px = [r, g, b, 0xFF];
+            if state == IconState::ActiveDiagnostic {
+                // A filled circle (radius 5) centred near the top-right corner.
+                let (dx, dy) = (x - (size - 8), y - 8);
+                if dx * dx + dy * dy <= 25 {
+                    px = [0xE6, 0x1E, 0x1E, 0xFF];
+                }
+            }
+            buf.extend_from_slice(&px);
+        }
+    }
+    buf
+}
+
 /// Resolve the quit-confirmation dialog. Confirming with "Don't ask again" ticked
 /// persists `confirm_on_quit = false`; cancelling leaves everything untouched.
 pub fn resolve_quit_dialog(confirmed: bool, dont_ask_again: bool) -> QuitResolution {
@@ -369,5 +401,26 @@ mod tests {
     fn cancelling_quit_does_nothing() {
         assert_eq!(resolve_quit_dialog(false, true), QuitResolution::Cancel);
         assert_eq!(resolve_quit_dialog(false, false), QuitResolution::Cancel);
+    }
+
+    // --- icon pixels ---
+
+    #[test]
+    fn icon_rgba_has_the_expected_size_and_distinct_colors() {
+        let n = (ICON_SIZE * ICON_SIZE * 4) as usize;
+        for s in [
+            IconState::Active,
+            IconState::ActiveDiagnostic,
+            IconState::Paused,
+            IconState::Panic,
+        ] {
+            assert_eq!(icon_rgba(s).len(), n, "{s:?} is ICON_SIZE² RGBA8");
+        }
+        // A center pixel differs across the base states.
+        let mid = ((ICON_SIZE * ICON_SIZE / 2 + ICON_SIZE / 2) * 4) as usize;
+        let rgb = |s| icon_rgba(s)[mid..mid + 3].to_vec();
+        assert_ne!(rgb(IconState::Active), rgb(IconState::Paused));
+        assert_ne!(rgb(IconState::Active), rgb(IconState::Panic));
+        assert_ne!(rgb(IconState::Paused), rgb(IconState::Panic));
     }
 }

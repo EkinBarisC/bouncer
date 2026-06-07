@@ -23,8 +23,10 @@ path = "src/main.rs"
 # property test (#5).
 [dependencies]
 directories = "6.0.0"
+eframe = "0.34.3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+tray-icon = "0.24.0"
 
 [features]
 # Opt-in: compiles the Windows test-only harness (`test_support`) and the

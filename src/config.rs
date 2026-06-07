@@ -200,10 +200,12 @@ mod tests {
     fn save_then_load_round_trips() {
         let dir = TempDir::new("roundtrip");
         let path = dir.path().join("nested").join("config.toml");
-        let mut cfg = Config::default();
-        cfg.keyboard_threshold_ms = 17;
-        cfg.confirm_on_quit = false;
-        cfg.panic_hotkey = "Ctrl+Shift+Pause".to_string();
+        let cfg = Config {
+            keyboard_threshold_ms: 17,
+            confirm_on_quit: false,
+            panic_hotkey: "Ctrl+Shift+Pause".to_string(),
+            ..Config::default()
+        };
 
         cfg.save_to_path(&path)
             .expect("save creates dirs and writes");
