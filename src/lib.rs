@@ -17,3 +17,8 @@ pub mod messages;
 pub mod platform;
 pub mod stats;
 pub mod ui;
+
+/// Test-only harness for the SendInput-driven keyboard integration test (#7).
+/// Compiled only under `--features integration-test` on Windows; never shipped.
+#[cfg(all(windows, feature = "integration-test"))]
+pub mod test_support;

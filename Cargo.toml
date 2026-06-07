@@ -25,6 +25,12 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+[features]
+# Opt-in: compiles the Windows test-only harness (`test_support`) and the
+# SendInput-driven end-to-end test. Installs a global hook and synthesizes real
+# input, so it is never on by default — run with `cargo test --features integration-test`.
+integration-test = []
+
 [dev-dependencies]
 # Property-based testing for the engine's fail-open safety invariant (#5).
 proptest = "1"
