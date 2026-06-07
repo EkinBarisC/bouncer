@@ -10,6 +10,9 @@ pub mod mode;
 pub mod panic;
 pub mod verdict;
 
+#[cfg(test)]
+pub(crate) mod test_util;
+
 pub use debouncer::{Debouncer, Thresholds};
 pub use engine::Engine;
 pub use event::{Device, EventKind, InputEvent, KeyId};

@@ -81,35 +81,8 @@ impl Debouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::event::{Device, EventKind, InputEvent, KeyId};
+    use crate::core::test_util::{down, mouse_down, mouse_up, up, A, B, LMB, THR};
     use crate::core::verdict::Verdict;
-
-    /// Default thresholds used across tests: keyboard 30 ms, mouse 40 ms.
-    const THR: Thresholds = Thresholds {
-        keyboard_ms: 30,
-        mouse_ms: 40,
-    };
-
-    const A: KeyId = 0x41; // 'A'
-    const B: KeyId = 0x42; // 'B'
-    const LMB: KeyId = 0x01; // a mouse button id
-
-    fn ev(device: Device, key: KeyId, kind: EventKind, t: u64) -> InputEvent {
-        InputEvent {
-            device,
-            key,
-            kind,
-            timestamp_ms: t,
-            injected: false,
-        }
-    }
-
-    fn down(key: KeyId, t: u64) -> InputEvent {
-        ev(Device::Keyboard, key, EventKind::Down, t)
-    }
-    fn up(key: KeyId, t: u64) -> InputEvent {
-        ev(Device::Keyboard, key, EventKind::Up, t)
-    }
 
     // 1. A down arriving sooner than the threshold after the same key's up is chatter.
     #[test]
@@ -187,11 +160,9 @@ mod tests {
         assert_eq!(kb.decide(down(A, 35), THR), Verdict::Pass); // 35 >= 30 → legit
 
         let mut mouse = Debouncer::new();
-        let m_down = |t| ev(Device::Mouse, LMB, EventKind::Down, t);
-        let m_up = |t| ev(Device::Mouse, LMB, EventKind::Up, t);
-        assert_eq!(mouse.decide(m_down(0), THR), Verdict::Pass);
-        assert_eq!(mouse.decide(m_up(0), THR), Verdict::Pass);
-        assert_eq!(mouse.decide(m_down(35), THR), Verdict::Suppress); // 35 < 40 → chatter
+        assert_eq!(mouse.decide(mouse_down(LMB, 0), THR), Verdict::Pass);
+        assert_eq!(mouse.decide(mouse_up(LMB, 0), THR), Verdict::Pass);
+        assert_eq!(mouse.decide(mouse_down(LMB, 35), THR), Verdict::Suppress); // 35 < 40 → chatter
     }
 
     // 9. A threshold above the cap behaves as the cap (clamped to MAX_THRESHOLD_MS = 100).
