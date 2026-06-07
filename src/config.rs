@@ -4,6 +4,7 @@
 //! and clamping are added test-first in issue #6.
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// The hard cap applied to both thresholds, so a hand-edited config can't turn
 /// Bouncer into an input black hole (DESIGN.md §6, §8).
@@ -66,6 +67,31 @@ impl Config {
     /// Serialize to a TOML string suitable for writing to disk.
     pub fn to_toml_string(&self) -> String {
         toml::to_string(self).expect("Config is always serializable")
+    }
+
+    /// The canonical on-disk location, `…\Bouncer\config.toml` (via `directories`,
+    /// so macOS/Linux paths come free later). `None` only if no home dir resolves.
+    pub fn config_path() -> Option<PathBuf> {
+        directories::ProjectDirs::from("", "", "Bouncer")
+            .map(|dirs| dirs.config_dir().join("config.toml"))
+    }
+
+    /// Load from a specific file. **Defensive** like [`load_from_str`](Self::load_from_str):
+    /// a missing or unreadable file yields defaults, and a corrupt one is parsed
+    /// leniently. Never fails.
+    pub fn load_from_path(path: &Path) -> Config {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => Config::load_from_str(&contents),
+            Err(_) => Config::default(),
+        }
+    }
+
+    /// Persist to a specific file, creating parent directories as needed.
+    pub fn save_to_path(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, self.to_toml_string())
     }
 }
 
@@ -133,5 +159,64 @@ mod tests {
     fn unknown_keys_are_ignored() {
         let c = Config::load_from_str("keyboard_threshold_ms = 25\nbogus_field = \"ignored\"");
         assert_eq!(c.keyboard_threshold_ms, 25);
+    }
+
+    // --- file lifecycle (#10) ---
+
+    /// A unique scratch path under the OS temp dir, removed when the guard drops.
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static N: AtomicU32 = AtomicU32::new(0);
+            let p = std::env::temp_dir().join(format!(
+                "bouncer-test-{}-{}-{}",
+                std::process::id(),
+                tag,
+                N.fetch_add(1, Ordering::Relaxed),
+            ));
+            TempDir(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // 7. A missing file loads as defaults (never errors).
+    #[test]
+    fn load_from_missing_path_yields_defaults() {
+        let dir = TempDir::new("missing");
+        let path = dir.path().join("does-not-exist.toml");
+        assert_eq!(Config::load_from_path(&path), Config::default());
+    }
+
+    // 8. Save then load round-trips a non-default config, creating parent dirs.
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = TempDir::new("roundtrip");
+        let path = dir.path().join("nested").join("config.toml");
+        let mut cfg = Config::default();
+        cfg.keyboard_threshold_ms = 17;
+        cfg.confirm_on_quit = false;
+        cfg.panic_hotkey = "Ctrl+Shift+Pause".to_string();
+
+        cfg.save_to_path(&path)
+            .expect("save creates dirs and writes");
+        assert_eq!(Config::load_from_path(&path), cfg);
+    }
+
+    // 9. A corrupt file on disk still loads defensively (defaults), never panics.
+    #[test]
+    fn load_from_corrupt_path_yields_defaults() {
+        let dir = TempDir::new("corrupt");
+        let path = dir.path().join("config.toml");
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(&path, "@@@ not toml @@@").unwrap();
+        assert_eq!(Config::load_from_path(&path), Config::default());
     }
 }
