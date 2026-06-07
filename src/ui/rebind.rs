@@ -30,19 +30,28 @@ impl RebindCapture {
     /// Feed one key event while capturing. A key down extends the held set and
     /// snapshots it as the candidate; a key up just relaxes the held set.
     pub fn on_event(&mut self, key: KeyId, kind: EventKind) {
-        let _ = (key, kind);
-        todo!("GREEN")
+        match kind {
+            EventKind::Down => {
+                self.held.insert(key);
+                // Snapshot the combination held at this press — "what you were
+                // holding when you pressed the last key". Survives the release.
+                self.captured = self.held.iter().copied().collect();
+            }
+            EventKind::Up => {
+                self.held.remove(&key);
+            }
+        }
     }
 
     /// The captured combination, sorted, for live display. Empty before any input.
     pub fn keys(&self) -> Vec<KeyId> {
-        todo!("GREEN")
+        self.captured.iter().copied().collect()
     }
 
     /// The candidate chord, validated. `Err` until the captured combination has at
     /// least one modifier and one non-modifier key.
     pub fn chord(&self) -> Result<PanicChord, ChordError> {
-        todo!("GREEN")
+        PanicChord::new(&self.keys())
     }
 }
 
