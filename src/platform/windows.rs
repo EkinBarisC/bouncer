@@ -277,7 +277,10 @@ fn apply_command(cmd: Command) -> bool {
                 false
             }
             Command::SetDiagnostic(_) => false, // UI-side stats overlay (#11)
-            Command::RebindPanic(_) => false,   // typed chord rebind (#9)
+            Command::RebindPanic(chord) => {
+                state.engine.set_panic_chord(chord);
+                false
+            }
             Command::Shutdown => true,
         }
     })

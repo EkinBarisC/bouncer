@@ -83,6 +83,14 @@ impl PanicDetector {
         }
     }
 
+    /// Swap in a new chord (a live rebind). Resets the held-key tracking and edge
+    /// state so the change can't fire a spurious toggle.
+    pub fn set_chord(&mut self, chord: PanicChord) {
+        self.chord = chord;
+        self.held.clear();
+        self.was_full = false;
+    }
+
     /// Feed one event; update the held-key set and report toggle/consume.
     pub fn on_event(&mut self, event: InputEvent) -> PanicReaction {
         match event.kind {
