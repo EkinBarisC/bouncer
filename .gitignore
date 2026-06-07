@@ -14,3 +14,6 @@ lcov.info
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local-only working notes (kept off the repo by request)
+CONTEXT.md
