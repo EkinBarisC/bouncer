@@ -23,10 +23,8 @@ path = "src/main.rs"
 # property test (#5).
 [dependencies]
 directories = "6.0.0"
-eframe = "0.34.3"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-tray-icon = "0.24.0"
 
 [features]
 # Opt-in: compiles the Windows test-only harness (`test_support`) and the
@@ -45,5 +43,9 @@ codegen-units = 1
 panic = "abort"
 
 [target."cfg(windows)".dependencies]
+# The tray + egui UI is Windows-only for v1 (the app is gated behind cfg(windows)),
+# so its heavy GUI deps live here rather than in the cross-platform set.
+eframe = "0.34.3"
+tray-icon = "0.24.0"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_LibraryLoader"] }
 winreg = "0.56.0"
