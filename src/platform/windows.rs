@@ -1,9 +1,11 @@
-//! Windows backend: `WH_KEYBOARD_LL` feeding the pure `Engine`, with channel
-//! control woken via `PostThreadMessageW` (per ADR-0001). Mouse (`WH_MOUSE_LL`)
-//! and the eviction watchdog land in later slices (#8, and the supervisor wiring).
+//! Windows backend: `WH_KEYBOARD_LL` + `WH_MOUSE_LL` feeding the pure `Engine`,
+//! with channel control woken via `PostThreadMessageW` (per ADR-0001). The
+//! eviction watchdog lands with the supervisor wiring.
 //!
-//! The hot path is the hook callback: it borrows thread-local state, asks the
-//! Engine for a verdict, and returns synchronously — no allocation, no lock.
+//! The hot path is each hook callback: it borrows thread-local state, asks the
+//! Engine for a verdict, and returns synchronously — no allocation, no lock. Both
+//! hooks share one `HookState` (one Engine), so the Debouncer tracks keyboard and
+//! mouse timing in the same place.
 
 use crate::core::Engine;
 use crate::core::{Device, EventKind, InputEvent, Thresholds, Verdict};
@@ -16,17 +18,27 @@ use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-    WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    TranslateMessage, UnhookWindowsHookEx, HHOOK, HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWS_HOOK_ID, WM_APP,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
-/// Per-hook-thread decision state, reached by the C callback through a
+// Mouse-button `KeyId`s — the standard mouse virtual-key codes, so they never
+// collide with keyboard vks (which start at 0x08) and the Debouncer can key on them.
+const MOUSE_LEFT: u32 = 0x01;
+const MOUSE_RIGHT: u32 = 0x02;
+const MOUSE_MIDDLE: u32 = 0x04;
+const MOUSE_X1: u32 = 0x05;
+const MOUSE_X2: u32 = 0x06;
+
+/// Per-hook-thread decision state, reached by the C callbacks through a
 /// `thread_local`. Owns the Engine so the hot path never crosses a lock.
 pub(crate) struct HookState {
     pub engine: Engine,
     pub reports: Sender<Report>,
-    /// Production passes `LLKHF_INJECTED` events straight through; the
-    /// integration-test build sets this so `SendInput` can drive the engine.
+    /// Production passes injected events straight through; the integration-test
+    /// build sets this so `SendInput` can drive the engine.
     pub process_injected: bool,
 }
 
@@ -34,41 +46,22 @@ thread_local! {
     static HOOK_STATE: RefCell<Option<HookState>> = const { RefCell::new(None) };
 }
 
-/// The `WH_KEYBOARD_LL` callback. Synchronous and allocation-free on the common
-/// path: returns `LRESULT(1)` to suppress, or chains on to pass.
-unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code < 0 {
-        // Not an action we may process; the docs require chaining on.
-        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
-    }
-
-    // SAFETY: for `WH_KEYBOARD_LL`, `lparam` is a pointer to a `KBDLLHOOKSTRUCT`.
-    let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-    let kind = match wparam.0 as u32 {
-        WM_KEYDOWN | WM_SYSKEYDOWN => Some(EventKind::Down),
-        WM_KEYUP | WM_SYSKEYUP => Some(EventKind::Up),
-        _ => None,
-    };
-
-    let verdict = HOOK_STATE.with(|cell| {
+/// Run one event through the Engine and return its verdict. Shared by both hook
+/// callbacks; allocation-free except an off-path `Report` on a mode change.
+fn decide(device: Device, key: u32, kind: EventKind, injected: bool, time_ms: u64) -> Verdict {
+    HOOK_STATE.with(|cell| {
         let mut guard = cell.borrow_mut();
         let Some(state) = guard.as_mut() else {
             return Verdict::Pass;
         };
-        let Some(kind) = kind else {
-            return Verdict::Pass;
-        };
-
-        let injected = info.flags.0 & LLKHF_INJECTED.0 != 0;
         if injected && !state.process_injected {
             return Verdict::Pass; // chatter is physical — never an injected event
         }
-
         let event = InputEvent {
-            device: Device::Keyboard,
-            key: info.vkCode,
+            device,
+            key,
             kind,
-            timestamp_ms: info.time as u64,
+            timestamp_ms: time_ms,
             injected,
         };
         let outcome = state.engine.on_event(event);
@@ -77,34 +70,111 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
             let _ = state.reports.send(Report::ModeChanged(mode));
         }
         outcome.verdict
-    });
+    })
+}
 
-    match verdict {
+/// The `WH_KEYBOARD_LL` callback. Synchronous: returns `LRESULT(1)` to suppress,
+/// or chains on to pass.
+unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code < 0 {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
+    // SAFETY: for `WH_KEYBOARD_LL`, `lparam` is a pointer to a `KBDLLHOOKSTRUCT`.
+    let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+    let kind = match wparam.0 as u32 {
+        WM_KEYDOWN | WM_SYSKEYDOWN => EventKind::Down,
+        WM_KEYUP | WM_SYSKEYUP => EventKind::Up,
+        _ => return unsafe { CallNextHookEx(None, code, wparam, lparam) },
+    };
+    let injected = info.flags.0 & LLKHF_INJECTED.0 != 0;
+    match decide(
+        Device::Keyboard,
+        info.vkCode,
+        kind,
+        injected,
+        info.time as u64,
+    ) {
         Verdict::Suppress => LRESULT(1),
         Verdict::Pass => unsafe { CallNextHookEx(None, code, wparam, lparam) },
     }
 }
 
-/// Install `WH_KEYBOARD_LL` on the **current** thread and store its `state`. The
-/// returned handle must be unhooked on the same thread (see [`WindowsBackend::run`]
-/// / the test harness). Shared by the production backend and the integration test.
-pub(crate) fn install_keyboard_hook(state: HookState) -> Result<HHOOK, BackendError> {
-    HOOK_STATE.with(|cell| *cell.borrow_mut() = Some(state));
-    let hmod = unsafe { GetModuleHandleW(None) }.map_err(|e| e.to_string())?;
-    unsafe {
-        SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_hook_proc),
-            Some(HINSTANCE(hmod.0)),
-            0,
-        )
+/// The `WH_MOUSE_LL` callback. Button events go through the Engine (the
+/// double-click bug is per-button release-anchored chatter); moves and wheel pass.
+unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code < 0 {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
-    .map_err(|e| e.to_string())
+    // SAFETY: for `WH_MOUSE_LL`, `lparam` is a pointer to an `MSLLHOOKSTRUCT`.
+    let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+    let Some((kind, button)) = mouse_button(wparam.0 as u32, info.mouseData) else {
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    };
+    let injected = info.flags & LLMHF_INJECTED != 0;
+    match decide(Device::Mouse, button, kind, injected, info.time as u64) {
+        Verdict::Suppress => LRESULT(1),
+        Verdict::Pass => unsafe { CallNextHookEx(None, code, wparam, lparam) },
+    }
+}
+
+/// Map a mouse message to `(kind, button-key)`; `None` for non-button events
+/// (move, wheel) which are never chatter.
+fn mouse_button(msg: u32, mouse_data: u32) -> Option<(EventKind, u32)> {
+    let pair = match msg {
+        WM_LBUTTONDOWN => (EventKind::Down, MOUSE_LEFT),
+        WM_LBUTTONUP => (EventKind::Up, MOUSE_LEFT),
+        WM_RBUTTONDOWN => (EventKind::Down, MOUSE_RIGHT),
+        WM_RBUTTONUP => (EventKind::Up, MOUSE_RIGHT),
+        WM_MBUTTONDOWN => (EventKind::Down, MOUSE_MIDDLE),
+        WM_MBUTTONUP => (EventKind::Up, MOUSE_MIDDLE),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            // The X button (1 or 2) is in the high word of mouseData.
+            let button = match (mouse_data >> 16) as u16 {
+                1 => MOUSE_X1,
+                2 => MOUSE_X2,
+                _ => return None,
+            };
+            let kind = if msg == WM_XBUTTONDOWN {
+                EventKind::Down
+            } else {
+                EventKind::Up
+            };
+            (kind, button)
+        }
+        _ => return None,
+    };
+    Some(pair)
+}
+
+/// Store the decision state for the current thread's hooks. Call before installing.
+pub(crate) fn set_hook_state(state: HookState) {
+    HOOK_STATE.with(|cell| *cell.borrow_mut() = Some(state));
 }
 
 /// Clear the current thread's hook state (after unhooking).
 pub(crate) fn clear_hook_state() {
     HOOK_STATE.with(|cell| *cell.borrow_mut() = None);
+}
+
+/// Install a low-level hook of `id` with `proc` on the **current** thread. The
+/// returned handle must be unhooked on the same thread. Shared by the production
+/// backend and the integration-test observer hooks.
+pub(crate) fn install_low_level_hook(
+    id: WINDOWS_HOOK_ID,
+    proc: HOOKPROC,
+) -> Result<HHOOK, BackendError> {
+    let hmod = unsafe { GetModuleHandleW(None) }.map_err(|e| e.to_string())?;
+    unsafe { SetWindowsHookExW(id, proc, Some(HINSTANCE(hmod.0)), 0) }.map_err(|e| e.to_string())
+}
+
+/// Install the Bouncer keyboard hook (assumes [`set_hook_state`] was called).
+pub(crate) fn install_keyboard_hook() -> Result<HHOOK, BackendError> {
+    install_low_level_hook(WH_KEYBOARD_LL, Some(keyboard_hook_proc))
+}
+
+/// Install the Bouncer mouse hook (assumes [`set_hook_state`] was called).
+pub(crate) fn install_mouse_hook() -> Result<HHOOK, BackendError> {
+    install_low_level_hook(WH_MOUSE_LL, Some(mouse_hook_proc))
 }
 
 /// Wake a backend message loop so it drains pending `Command`s. A `Command` sender
@@ -132,16 +202,19 @@ impl HookBackend for WindowsBackend {
         commands: Receiver<Command>,
         reports: Sender<Report>,
     ) -> Result<(), BackendError> {
-        let hook = install_keyboard_hook(HookState {
+        set_hook_state(HookState {
             engine,
             reports,
             process_injected: false,
-        })?;
+        });
+        let keyboard = install_keyboard_hook()?;
+        let mouse = install_mouse_hook()?;
 
         let result = pump_messages(&commands);
 
         unsafe {
-            let _ = UnhookWindowsHookEx(hook);
+            let _ = UnhookWindowsHookEx(mouse);
+            let _ = UnhookWindowsHookEx(keyboard);
         }
         clear_hook_state();
         result
@@ -149,8 +222,8 @@ impl HookBackend for WindowsBackend {
 }
 
 /// Run the OS message loop until `WM_QUIT` or a `Command::Shutdown`. The loop is
-/// woken for commands by `post_wake` (`PostThreadMessageW`); keyboard events are
-/// delivered to the hook callback by the OS while we block in `GetMessageW`.
+/// woken for commands by `post_wake` (`PostThreadMessageW`); input events are
+/// delivered to the hook callbacks by the OS while we block in `GetMessageW`.
 fn pump_messages(commands: &Receiver<Command>) -> Result<(), BackendError> {
     loop {
         let mut msg = MSG::default();

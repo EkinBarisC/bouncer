@@ -7,5 +7,5 @@
 serial-input-hooks = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(keyboard_e2e)'
+filter = 'binary(keyboard_e2e) | binary(mouse_e2e)'
 test-group = 'serial-input-hooks'
