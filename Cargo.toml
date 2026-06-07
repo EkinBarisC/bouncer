@@ -25,6 +25,10 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+[dev-dependencies]
+# Property-based testing for the engine's fail-open safety invariant (#5).
+proptest = "1"
+
 [profile.release]
 strip = true
 lto = true
