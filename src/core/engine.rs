@@ -44,6 +44,12 @@ impl Engine {
         self.mode = mode;
     }
 
+    /// Set the active chatter thresholds. The shell calls this on a `SetThresholds`
+    /// command (and once at startup from the loaded `Config`).
+    pub fn set_thresholds(&mut self, thresholds: Thresholds) {
+        self.thresholds = thresholds;
+    }
+
     /// The single synchronous decision for one input event.
     ///
     /// The `PanicDetector` observes *every* event (it must track held keys to see
