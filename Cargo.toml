@@ -18,10 +18,12 @@ path = "src/lib.rs"
 name = "bouncer"
 path = "src/main.rs"
 
+# Heavy/risky deps are introduced with the slice that needs them: `windows` at
+# the keyboard backend (#7), egui at the UI (#10), proptest at the engine
+# property test (#5).
 [dependencies]
-# Intentionally empty for now. Heavy/risky deps are introduced with the slice
-# that needs them: `windows` at the keyboard backend (#7), egui at the UI (#10),
-# serde/toml at config (#6), proptest at the engine property test (#5).
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [profile.release]
 strip = true
