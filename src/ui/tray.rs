@@ -81,43 +81,93 @@ impl TrayModel {
     /// The icon variant for the current state. `ActiveDiagnostic` only when both
     /// `Active` and recording; Paused/Panic never show the diagnostic badge.
     pub fn icon(&self) -> IconState {
-        todo!("GREEN")
+        match self.mode {
+            Mode::Active if self.diagnostic => IconState::ActiveDiagnostic,
+            Mode::Active => IconState::Active,
+            Mode::Paused => IconState::Paused,
+            Mode::Panic => IconState::Panic,
+        }
     }
 
     /// The Pause/Resume entry label: "Pause" while Active, "Resume" otherwise
     /// (Paused, and Panic — where clicking it also clears Panic).
     pub fn pause_resume_label(&self) -> &'static str {
-        todo!("GREEN")
+        match self.mode {
+            Mode::Active => "Pause",
+            Mode::Paused | Mode::Panic => "Resume",
+        }
     }
 
     /// Whether the Diagnostic entry is clickable. Greyed (false) while Paused.
     pub fn diagnostic_enabled(&self) -> bool {
-        todo!("GREEN")
+        self.mode != Mode::Paused
     }
 
     /// Whether the Diagnostic entry shows as checked.
     pub fn diagnostic_checked(&self) -> bool {
-        todo!("GREEN")
+        self.diagnostic
     }
 
     /// The live status-line tooltip: Mode + session counter, plus a recovery hint
     /// in the non-Active (pass-through) modes.
     pub fn tooltip(&self) -> String {
-        todo!("GREEN")
+        let counts = format!(
+            "{} kbd · {} mouse suppressed",
+            self.keyboard_suppressed, self.mouse_suppressed
+        );
+        match self.mode {
+            Mode::Active if self.diagnostic => {
+                format!("Bouncer — Active (diagnostic) · {counts}")
+            }
+            Mode::Active => format!("Bouncer — Active · {counts}"),
+            Mode::Paused => {
+                format!("Bouncer — Paused (pass-through) · right-click ▸ Resume to re-enable · {counts}")
+            }
+            Mode::Panic => {
+                format!(
+                    "Bouncer — PANIC (pass-through) · press {} to resume",
+                    self.panic_hotkey
+                )
+            }
+        }
     }
 
     /// Resolve a tray interaction to the effect the shell should carry out.
     pub fn apply(&self, action: TrayAction) -> TrayEffect {
-        let _ = action;
-        todo!("GREEN")
+        match action {
+            // Active pauses; Paused and Panic both resume to Active (clearing Panic).
+            TrayAction::TogglePause => match self.mode {
+                Mode::Active => TrayEffect::SetMode(Mode::Paused),
+                Mode::Paused | Mode::Panic => TrayEffect::SetMode(Mode::Active),
+            },
+            TrayAction::ToggleDiagnostic => {
+                if self.diagnostic_enabled() {
+                    TrayEffect::SetDiagnostic(!self.diagnostic)
+                } else {
+                    TrayEffect::None
+                }
+            }
+            TrayAction::OpenSettings => TrayEffect::OpenSettings,
+            TrayAction::Quit => {
+                if self.confirm_on_quit {
+                    TrayEffect::ConfirmQuit
+                } else {
+                    TrayEffect::Quit
+                }
+            }
+        }
     }
 }
 
 /// Resolve the quit-confirmation dialog. Confirming with "Don't ask again" ticked
 /// persists `confirm_on_quit = false`; cancelling leaves everything untouched.
 pub fn resolve_quit_dialog(confirmed: bool, dont_ask_again: bool) -> QuitResolution {
-    let _ = (confirmed, dont_ask_again);
-    todo!("GREEN")
+    if !confirmed {
+        return QuitResolution::Cancel;
+    }
+    QuitResolution::Quit {
+        new_confirm_on_quit: if dont_ask_again { Some(false) } else { None },
+    }
 }
 
 #[cfg(test)]
