@@ -34,11 +34,16 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Test
-        run: cargo nextest run --all-features
+        run: cargo nextest run
+
+      - name: Integration test (SendInput, Windows)
+        # Opt-in: installs a global keyboard hook and synthesizes input, so it is
+        # gated behind the `integration-test` feature and run as its own step.
+        run: cargo nextest run --features integration-test -E 'binary(keyboard_e2e)'
 
       - name: Doc tests
         # nextest does not run doctests; run them separately.
-        run: cargo test --doc --all-features
+        run: cargo test --doc
 
   deny:
     runs-on: ubuntu-latest
