@@ -23,6 +23,12 @@ pub enum Command {
 /// Hook thread -> UI thread.
 #[derive(Debug, Clone)]
 pub enum Report {
+    /// Sent once when the backend's message loop is up. Carries the hook thread id
+    /// so the UI can `post_wake` it after sending a `Command` (low-level hooks don't
+    /// post queue messages, so the loop must be woken to drain commands promptly).
+    BackendReady {
+        thread_id: u32,
+    },
     Suppressed {
         device: Device,
         key: KeyId,
