@@ -5,6 +5,7 @@
 
 #[cfg(windows)]
 pub mod app;
+pub mod hotkey;
 pub mod rebind;
 pub mod settings;
 pub mod tray;
