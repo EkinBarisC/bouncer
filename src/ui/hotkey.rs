@@ -21,15 +21,85 @@ pub enum HotkeyError {
 /// Render keys as a stable `Mod+Mod+Key` label, modifiers first (Ctrl, Alt, Shift,
 /// Win), then the remaining keys ascending.
 pub fn display(keys: &[KeyId]) -> String {
-    let _ = keys;
-    todo!("GREEN")
+    let mut sorted: Vec<KeyId> = keys.to_vec();
+    sorted.sort_by_key(|&k| (modifier_rank(k), k));
+    sorted
+        .into_iter()
+        .map(key_name)
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// Parse a hotkey string (e.g. `"Ctrl+Alt+Shift+F12"`) into a validated chord.
 /// Case-insensitive; surrounding whitespace per token is ignored.
 pub fn parse(s: &str) -> Result<PanicChord, HotkeyError> {
-    let _ = s;
-    todo!("GREEN")
+    let mut keys = Vec::new();
+    for token in s.split('+').map(str::trim).filter(|t| !t.is_empty()) {
+        match token_to_vk(token) {
+            Some(vk) => keys.push(vk),
+            None => return Err(HotkeyError::UnknownToken(token.to_string())),
+        }
+    }
+    if keys.is_empty() {
+        return Err(HotkeyError::Empty);
+    }
+    PanicChord::new(&keys).map_err(HotkeyError::Invalid)
+}
+
+/// Sort key: modifiers (Ctrl, Alt, Shift, Win) come before ordinary keys.
+fn modifier_rank(vk: KeyId) -> u8 {
+    match vk {
+        0x11 | 0xA2 | 0xA3 => 0, // Ctrl
+        0x12 | 0xA4 | 0xA5 => 1, // Alt
+        0x10 | 0xA0 | 0xA1 => 2, // Shift
+        0x5B | 0x5C => 3,        // Win
+        _ => 4,
+    }
+}
+
+/// A display name for one virtual-key code.
+fn key_name(vk: KeyId) -> String {
+    match vk {
+        0x10 | 0xA0 | 0xA1 => "Shift".to_string(),
+        0x11 | 0xA2 | 0xA3 => "Ctrl".to_string(),
+        0x12 | 0xA4 | 0xA5 => "Alt".to_string(),
+        0x5B | 0x5C => "Win".to_string(),
+        0x30..=0x39 => ((b'0' + (vk - 0x30) as u8) as char).to_string(),
+        0x41..=0x5A => ((b'A' + (vk - 0x41) as u8) as char).to_string(),
+        0x70..=0x7B => format!("F{}", vk - 0x6F),
+        other => format!("0x{other:02X}"),
+    }
+}
+
+/// Map one parsed token (case-insensitive) to a virtual-key code.
+fn token_to_vk(token: &str) -> Option<KeyId> {
+    let t = token.to_ascii_lowercase();
+    let vk = match t.as_str() {
+        "ctrl" | "control" => 0x11,
+        "alt" => 0x12,
+        "shift" => 0x10,
+        "win" | "super" | "meta" | "cmd" => 0x5B,
+        // F1..=F12
+        _ if t.starts_with('f') && t.len() >= 2 => {
+            let n: u8 = t[1..].parse().ok()?;
+            if (1..=12).contains(&n) {
+                0x6F + n as u32
+            } else {
+                return None;
+            }
+        }
+        // A single letter or digit.
+        _ if t.len() == 1 => {
+            let c = t.chars().next()?;
+            match c {
+                'a'..='z' => 0x41 + (c as u32 - 'a' as u32),
+                '0'..='9' => 0x30 + (c as u32 - '0' as u32),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(vk)
 }
 
 #[cfg(test)]
