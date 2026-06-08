@@ -51,6 +51,10 @@ fn main() {
     if !cfg.enabled {
         engine.set_mode(Mode::Paused);
     }
+    // Apply the saved panic hotkey (falls back to the default chord if unparseable).
+    if let Ok(chord) = bouncer::ui::hotkey::parse(&cfg.panic_hotkey) {
+        engine.set_panic_chord(chord);
+    }
 
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (rep_tx, rep_rx) = mpsc::channel();

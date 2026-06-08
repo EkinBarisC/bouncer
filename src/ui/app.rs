@@ -21,6 +21,7 @@ use crate::core::event::EventKind;
 use crate::core::{Device, KeyId, Mode};
 use crate::messages::{Command, Report};
 use crate::platform::windows::post_wake;
+use crate::ui::hotkey;
 use crate::ui::rebind::RebindCapture;
 use crate::ui::tray::{
     icon_rgba, resolve_quit_dialog, IconState, QuitResolution, TrayAction, TrayEffect, TrayModel,
@@ -62,7 +63,12 @@ struct MenuItems {
 }
 
 struct BouncerApp {
-    cfg: Config,
+    /// The committed, on-disk settings that drive the live engine.
+    applied: Config,
+    /// The edit buffer the Settings form mutates; committed by Save, discarded by
+    /// Cancel. (`enabled` is kept equal to `applied` — Pause/Resume owns it, not the
+    /// form — so it never counts as an unsaved change.)
+    draft: Config,
     cfg_path: Option<PathBuf>,
     cmd_tx: Sender<Command>,
     reports: Receiver<Report>,
@@ -139,7 +145,8 @@ impl BouncerApp {
 
         Ok(Self {
             cfg_path: Config::config_path(),
-            cfg,
+            applied: cfg.clone(),
+            draft: cfg,
             cmd_tx,
             reports,
             backend_thread_id: None,
@@ -170,8 +177,8 @@ impl BouncerApp {
             diagnostic: self.diagnostic,
             keyboard_suppressed: self.kb_count,
             mouse_suppressed: self.mouse_count,
-            confirm_on_quit: self.cfg.confirm_on_quit,
-            panic_hotkey: self.cfg.panic_hotkey.clone(),
+            confirm_on_quit: self.applied.confirm_on_quit,
+            panic_hotkey: self.applied.panic_hotkey.clone(),
         }
     }
 
@@ -185,25 +192,64 @@ impl BouncerApp {
 
     fn save_config(&self) {
         if let Some(path) = &self.cfg_path {
-            let _ = self.cfg.save_to_path(path);
+            let _ = self.applied.save_to_path(path);
         }
     }
 
-    /// Push the effective thresholds (a disabled device class debounces at 0 ms,
-    /// i.e. never suppresses) to the engine.
+    /// Push the applied thresholds (a disabled device class debounces at 0 ms, i.e.
+    /// never suppresses) to the engine.
     fn apply_thresholds(&self) {
         self.send(Command::SetThresholds {
-            keyboard_ms: if self.cfg.debounce_keyboard {
-                self.cfg.keyboard_threshold_ms
+            keyboard_ms: if self.applied.debounce_keyboard {
+                self.applied.keyboard_threshold_ms
             } else {
                 0
             },
-            mouse_ms: if self.cfg.debounce_mouse {
-                self.cfg.mouse_threshold_ms
+            mouse_ms: if self.applied.debounce_mouse {
+                self.applied.mouse_threshold_ms
             } else {
                 0
             },
         });
+    }
+
+    /// Whether the form has edits not yet committed to `applied`.
+    fn is_dirty(&self) -> bool {
+        self.draft != self.applied
+    }
+
+    /// Commit the draft: apply changed settings to the live engine/OS and persist.
+    fn save_settings(&mut self) {
+        let autostart_changed = self.draft.autostart != self.applied.autostart;
+        let hotkey_changed = self.draft.panic_hotkey != self.applied.panic_hotkey;
+
+        self.applied = self.draft.clone();
+        self.apply_thresholds();
+        if autostart_changed {
+            let _ = crate::platform::autostart::set_autostart(self.applied.autostart);
+        }
+        if hotkey_changed {
+            if let Ok(chord) = hotkey::parse(&self.applied.panic_hotkey) {
+                self.send(Command::RebindPanic(chord));
+            }
+        }
+        self.save_config();
+    }
+
+    /// Discard uncommitted edits.
+    fn cancel_settings(&mut self) {
+        self.draft = self.applied.clone();
+        self.rebinding = false;
+    }
+
+    /// Load factory defaults into the draft (preserving the live pause state, which
+    /// the form doesn't own). The user still reviews and Saves to apply.
+    fn reset_to_defaults(&mut self) {
+        self.draft = Config {
+            enabled: self.applied.enabled,
+            ..Config::default()
+        };
+        self.rebinding = false;
     }
 
     fn refresh_tray(&mut self) {
@@ -231,8 +277,10 @@ impl BouncerApp {
             TrayEffect::SetMode(m) => {
                 self.mode = m;
                 // Paused persists as `enabled = false`; Panic is never persisted.
+                // Keep draft in step so toggling pause never shows as a form edit.
                 if m != Mode::Panic {
-                    self.cfg.enabled = m == Mode::Active;
+                    self.applied.enabled = m == Mode::Active;
+                    self.draft.enabled = self.applied.enabled;
                     self.save_config();
                 }
                 self.send(Command::SetMode(m));
@@ -352,6 +400,8 @@ impl BouncerApp {
         self.draw_diagnostics(ui, &ctx);
         ui.separator();
         self.draw_settings_group(ui);
+        ui.separator();
+        self.draw_actions(ui);
 
         if self.confirm_quit_open {
             self.draw_quit_dialog(&ctx);
@@ -381,25 +431,12 @@ impl BouncerApp {
 
     fn draw_tuning(&mut self, ui: &mut egui::Ui) {
         ui.label("Tuning");
-        let mut changed = false;
-        changed |= ui
-            .checkbox(&mut self.cfg.debounce_keyboard, "Debounce keyboard")
-            .changed();
-        changed |= ui
-            .add(
-                egui::Slider::new(&mut self.cfg.keyboard_threshold_ms, 0..=100).text("ms keyboard"),
-            )
-            .changed();
-        changed |= ui
-            .checkbox(&mut self.cfg.debounce_mouse, "Debounce mouse")
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut self.cfg.mouse_threshold_ms, 0..=100).text("ms mouse"))
-            .changed();
-        if changed {
-            self.apply_thresholds();
-            self.save_config();
-        }
+        ui.checkbox(&mut self.draft.debounce_keyboard, "Debounce keyboard");
+        ui.add(
+            egui::Slider::new(&mut self.draft.keyboard_threshold_ms, 0..=100).text("ms keyboard"),
+        );
+        ui.checkbox(&mut self.draft.debounce_mouse, "Debounce mouse");
+        ui.add(egui::Slider::new(&mut self.draft.mouse_threshold_ms, 0..=100).text("ms mouse"));
     }
 
     fn draw_diagnostics(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -417,17 +454,11 @@ impl BouncerApp {
 
     fn draw_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.label("Settings");
-        if ui
-            .checkbox(&mut self.cfg.autostart, "Start on login")
-            .changed()
-        {
-            let _ = crate::platform::autostart::set_autostart(self.cfg.autostart);
-            self.save_config();
-        }
+        ui.checkbox(&mut self.draft.autostart, "Start on login");
 
         ui.horizontal(|ui| {
             ui.label("Panic hotkey:");
-            ui.monospace(&self.cfg.panic_hotkey);
+            ui.monospace(&self.draft.panic_hotkey);
         });
         if !self.rebinding {
             if ui.button("Rebind…").clicked() {
@@ -440,16 +471,13 @@ impl BouncerApp {
             ui.monospace(if keys.is_empty() {
                 "—".to_string()
             } else {
-                chord_display(&keys)
+                hotkey::display(&keys)
             });
             ui.horizontal(|ui| {
                 let valid = self.rebind_candidate.chord().is_ok();
+                // Accept only stages the chord into the draft; Save applies it.
                 if ui.add_enabled(valid, egui::Button::new("Accept")).clicked() {
-                    if let Ok(chord) = self.rebind_candidate.chord() {
-                        self.cfg.panic_hotkey = chord_display(&self.rebind_candidate.keys());
-                        self.send(Command::RebindPanic(chord));
-                        self.save_config();
-                    }
+                    self.draft.panic_hotkey = hotkey::display(&self.rebind_candidate.keys());
                     self.rebinding = false;
                 }
                 if ui.button("Cancel").clicked() {
@@ -458,11 +486,25 @@ impl BouncerApp {
             });
         }
 
-        if ui
-            .checkbox(&mut self.cfg.confirm_on_quit, "Confirm before quitting")
-            .changed()
-        {
-            self.save_config();
+        ui.checkbox(&mut self.draft.confirm_on_quit, "Confirm before quitting");
+    }
+
+    /// The Save / Cancel / Reset row that commits or discards the draft.
+    fn draw_actions(&mut self, ui: &mut egui::Ui) {
+        let dirty = self.is_dirty();
+        ui.horizontal(|ui| {
+            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                self.save_settings();
+            }
+            if ui.add_enabled(dirty, egui::Button::new("Cancel")).clicked() {
+                self.cancel_settings();
+            }
+            if ui.button("Reset to defaults").clicked() {
+                self.reset_to_defaults();
+            }
+        });
+        if dirty {
+            ui.colored_label(egui::Color32::from_rgb(0xC0, 0x80, 0x00), "Unsaved changes");
         }
     }
 
@@ -482,7 +524,8 @@ impl BouncerApp {
                         } = resolve_quit_dialog(true, self.dont_ask_again)
                         {
                             if let Some(v) = new_confirm_on_quit {
-                                self.cfg.confirm_on_quit = v;
+                                self.applied.confirm_on_quit = v;
+                                self.draft.confirm_on_quit = v;
                                 self.save_config();
                             }
                             self.confirm_quit_open = false;
@@ -591,31 +634,4 @@ fn key_to_vk(key: egui::Key) -> Option<KeyId> {
         _ => return None,
     };
     Some(vk)
-}
-
-/// A human-readable rendering of a captured chord, e.g. `Ctrl+Alt+Shift+F12`.
-fn chord_display(keys: &[KeyId]) -> String {
-    let name = |vk: KeyId| -> String {
-        match vk {
-            0x10 | 0xA0 | 0xA1 => "Shift".to_string(),
-            0x11 | 0xA2 | 0xA3 => "Ctrl".to_string(),
-            0x12 | 0xA4 | 0xA5 => "Alt".to_string(),
-            0x5B | 0x5C => "Win".to_string(),
-            0x30..=0x39 => ((b'0' + (vk - 0x30) as u8) as char).to_string(),
-            0x41..=0x5A => ((b'A' + (vk - 0x41) as u8) as char).to_string(),
-            0x70..=0x7B => format!("F{}", vk - 0x6F),
-            other => format!("0x{other:02X}"),
-        }
-    };
-    // Modifiers first (Ctrl, Alt, Shift, Win), then the rest, for a stable label.
-    let order = |vk: KeyId| match vk {
-        0x11 | 0xA2 | 0xA3 => 0,
-        0x12 | 0xA4 | 0xA5 => 1,
-        0x10 | 0xA0 | 0xA1 => 2,
-        0x5B | 0x5C => 3,
-        _ => 4,
-    };
-    let mut sorted: Vec<KeyId> = keys.to_vec();
-    sorted.sort_by_key(|&k| (order(k), k));
-    sorted.into_iter().map(name).collect::<Vec<_>>().join("+")
 }
