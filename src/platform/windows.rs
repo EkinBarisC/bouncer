@@ -70,6 +70,14 @@ fn decide(device: Device, key: u32, kind: EventKind, injected: bool, time_ms: u6
             // Off the hot path (only on a panic-chord toggle); best-effort.
             let _ = state.reports.send(Report::ModeChanged(mode));
         }
+        if let Some(gap_ms) = outcome.chatter_gap_ms {
+            // Off the hot path (only on an actual suppression); best-effort.
+            let _ = state.reports.send(Report::Suppressed {
+                device,
+                key,
+                gap_ms,
+            });
+        }
         outcome.verdict
     })
 }
@@ -305,8 +313,14 @@ mod tests {
         });
 
         // Legit press + release, then a 5 ms re-press: chatter, suppressed.
-        assert_eq!(decide(Device::Keyboard, A, EventKind::Down, false, 0), Verdict::Pass);
-        assert_eq!(decide(Device::Keyboard, A, EventKind::Up, false, 0), Verdict::Pass);
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Down, false, 0),
+            Verdict::Pass
+        );
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Up, false, 0),
+            Verdict::Pass
+        );
         assert_eq!(
             decide(Device::Keyboard, A, EventKind::Down, false, 5),
             Verdict::Suppress

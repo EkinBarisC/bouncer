@@ -1,7 +1,7 @@
 //! The pure decision engine: composes `Debouncer` + `PanicDetector` + `Mode` into
 //! one synchronous `on_event` call (per ADR-0001).
 
-use crate::core::debouncer::{Debouncer, Thresholds};
+use crate::core::debouncer::{Debouncer, Decision, Thresholds};
 use crate::core::event::InputEvent;
 use crate::core::mode::Mode;
 use crate::core::panic::PanicDetector;
@@ -78,18 +78,23 @@ impl Engine {
             None
         };
 
-        let verdict = if reaction.consume {
-            Verdict::Suppress
+        let (verdict, chatter_gap_ms) = if reaction.consume {
+            (Verdict::Suppress, None)
         } else {
             match self.mode {
-                Mode::Active => self.debouncer.decide(event, self.thresholds),
-                Mode::Paused | Mode::Panic => Verdict::Pass,
+                Mode::Active => match self.debouncer.decide(event, self.thresholds) {
+                    Decision::Pass => (Verdict::Pass, None),
+                    Decision::SuppressChatter { gap_ms } => (Verdict::Suppress, Some(gap_ms)),
+                    Decision::SuppressPairedUp => (Verdict::Suppress, None),
+                },
+                Mode::Paused | Mode::Panic => (Verdict::Pass, None),
             }
         };
 
         Outcome {
             verdict,
             mode_change,
+            chatter_gap_ms,
         }
     }
 }
@@ -205,6 +210,22 @@ mod tests {
         let out = e.on_event(down(A, 11));
         assert_eq!(out.mode_change, Some(Mode::Panic));
         assert_eq!(out.verdict, Verdict::Suppress); // completing key consumed
+    }
+
+    // 9. A chatter suppression surfaces its measured gap (the Report::Suppressed
+    //    payload, #27); the paired up and a chord consume do not.
+    #[test]
+    fn chatter_gap_is_surfaced_but_paired_up_and_chord_consume_are_not() {
+        let mut e = Engine::new();
+        assert_eq!(e.on_event(down(A, 0)).chatter_gap_ms, None);
+        assert_eq!(e.on_event(up(A, 0)).chatter_gap_ms, None);
+        assert_eq!(e.on_event(down(A, 5)).chatter_gap_ms, Some(5)); // chatter
+        assert_eq!(e.on_event(up(A, 6)).chatter_gap_ms, None); // its paired up
+
+        // The panic chord's completing key is suppressed but is not chatter.
+        let out = press_panic_chord(&mut e, 1000);
+        assert_eq!(out.verdict, Verdict::Suppress);
+        assert_eq!(out.chatter_gap_ms, None);
     }
 
     // --- Fail-open property tests (the safety invariant) ---
