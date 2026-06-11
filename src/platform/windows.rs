@@ -285,3 +285,48 @@ fn apply_command(cmd: Command) -> bool {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    const A: u32 = 0x41;
+
+    /// Feed `decide` directly (it's pure given the thread-local state): a chatter
+    /// re-press must emit `Report::Suppressed` so the UI counters tick (#27).
+    #[test]
+    fn chatter_suppression_sends_a_suppressed_report() {
+        let (tx, rx) = mpsc::channel();
+        set_hook_state(HookState {
+            engine: Engine::new(), // default keyboard threshold 30 ms
+            reports: tx,
+            process_injected: false,
+        });
+
+        // Legit press + release, then a 5 ms re-press: chatter, suppressed.
+        assert_eq!(decide(Device::Keyboard, A, EventKind::Down, false, 0), Verdict::Pass);
+        assert_eq!(decide(Device::Keyboard, A, EventKind::Up, false, 0), Verdict::Pass);
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Down, false, 5),
+            Verdict::Suppress
+        );
+        // The discarded paired up is also suppressed, but it's the same chatter
+        // incident — it must not tick the counter a second time.
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Up, false, 6),
+            Verdict::Suppress
+        );
+        clear_hook_state();
+
+        let reports: Vec<Report> = rx.try_iter().collect();
+        match reports.as_slice() {
+            [Report::Suppressed {
+                device: Device::Keyboard,
+                key: A,
+                gap_ms: 5,
+            }] => {}
+            other => panic!("expected exactly one Suppressed{{A, gap 5}} report, got {other:?}"),
+        }
+    }
+}
