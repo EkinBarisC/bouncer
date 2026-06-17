@@ -8,7 +8,7 @@
 //! mouse timing in the same place.
 
 use crate::core::Engine;
-use crate::core::{Device, EventKind, InputEvent, Thresholds, Verdict};
+use crate::core::{Device, EventKind, InputEvent, Verdict};
 use crate::messages::{Command, Report};
 use crate::platform::watchdog::{Health, Watchdog, WatchdogAction};
 use crate::platform::{BackendError, HookBackend};
@@ -429,14 +429,8 @@ fn apply_command(cmd: Command) -> bool {
             return matches!(cmd, Command::Shutdown);
         };
         match cmd {
-            Command::SetThresholds {
-                keyboard_ms,
-                mouse_ms,
-            } => {
-                state.engine.set_thresholds(Thresholds {
-                    keyboard_ms,
-                    mouse_ms,
-                });
+            Command::SetThresholds(thresholds) => {
+                state.engine.set_thresholds(thresholds);
                 false
             }
             Command::SetMode(mode) => {

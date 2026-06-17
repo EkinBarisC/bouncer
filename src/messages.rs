@@ -4,15 +4,14 @@
 //! a shared lock on the input path. Variants will gain real payloads as the slices
 //! that use them land (control in #9/#10, reports in #7/#11).
 
-use crate::core::{Device, KeyId, Mode, PanicChord};
+use crate::core::{Device, KeyId, Mode, PanicChord, Thresholds};
 
 /// UI thread -> hook thread.
 #[derive(Debug, Clone)]
 pub enum Command {
-    SetThresholds {
-        keyboard_ms: u8,
-        mouse_ms: u8,
-    },
+    /// New active thresholds (already projected from `Config`, e.g. a disabled
+    /// device class as 0 ms). Clamped again at the engine entry point.
+    SetThresholds(Thresholds),
     SetMode(Mode),
     SetDiagnostic(bool),
     /// New panic chord, captured + validated by the Settings rebind UI.

@@ -1,9 +1,10 @@
-//! Human-readable panic-hotkey strings ↔ virtual-key codes (issue #10).
+//! Human-readable panic-hotkey strings ↔ virtual-key codes.
 //!
 //! [`display`] renders a captured chord as `Ctrl+Alt+Shift+F12`; [`parse`] turns a
-//! config string back into a validated [`PanicChord`]. Pure and unit-tested, so the
-//! persisted `panic_hotkey` is authoritative: the shell parses it at startup to seed
-//! the engine, and on Save to apply a rebind or a reset-to-default.
+//! config string back into a validated [`PanicChord`]. Pure and unit-tested. This is
+//! the on-disk representation of a [`PanicChord`]: `Config` parses the stored string
+//! once at load and serializes the chord back through [`display`], so the rest of the
+//! app works with the typed chord, never a raw string.
 
 use crate::core::{ChordError, KeyId, PanicChord};
 

@@ -6,6 +6,7 @@
 pub mod debouncer;
 pub mod engine;
 pub mod event;
+pub mod hotkey;
 pub mod mode;
 pub mod panic;
 pub mod verdict;

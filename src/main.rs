@@ -14,7 +14,7 @@ fn main() {
     use std::thread;
 
     use bouncer::config::Config;
-    use bouncer::core::{Engine, Mode, Thresholds};
+    use bouncer::core::Engine;
     use bouncer::platform::single_instance::{self, SingleInstance};
     use bouncer::platform::windows::WindowsBackend;
     use bouncer::platform::HookBackend;
@@ -33,28 +33,12 @@ fn main() {
     // Reconcile autostart registration with the saved preference.
     let _ = bouncer::platform::autostart::set_autostart(cfg.autostart);
 
-    // Build the engine from config: thresholds (0 ms = that device class disabled),
-    // and Paused if the user left protection off.
+    // Build the engine from config: the Config projections own the threshold/mode
+    // mapping, and the panic chord is already typed (parsed once at config load).
     let mut engine = Engine::new();
-    engine.set_thresholds(Thresholds {
-        keyboard_ms: if cfg.debounce_keyboard {
-            cfg.keyboard_threshold_ms
-        } else {
-            0
-        },
-        mouse_ms: if cfg.debounce_mouse {
-            cfg.mouse_threshold_ms
-        } else {
-            0
-        },
-    });
-    if !cfg.enabled {
-        engine.set_mode(Mode::Paused);
-    }
-    // Apply the saved panic hotkey (falls back to the default chord if unparseable).
-    if let Ok(chord) = bouncer::ui::hotkey::parse(&cfg.panic_hotkey) {
-        engine.set_panic_chord(chord);
-    }
+    engine.set_thresholds(cfg.thresholds());
+    engine.set_mode(cfg.initial_mode());
+    engine.set_panic_chord(cfg.panic_hotkey.clone());
 
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let (rep_tx, rep_rx) = mpsc::channel();

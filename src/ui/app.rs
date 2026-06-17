@@ -18,11 +18,11 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::config::Config;
 use crate::core::event::EventKind;
+use crate::core::hotkey;
 use crate::core::{KeyId, Mode};
 use crate::messages::{Command, Report};
 use crate::platform::windows::post_wake;
 use crate::stats::{Stats, HISTOGRAM_BUCKETS, HISTOGRAM_BUCKET_MS};
-use crate::ui::hotkey;
 use crate::ui::rebind::RebindCapture;
 use crate::ui::tray::{
     icon_rgba, resolve_quit_dialog, IconState, QuitResolution, TrayAction, TrayEffect, TrayModel,
@@ -110,18 +110,14 @@ impl BouncerApp {
             ctx.request_repaint();
         });
 
-        let mode = if cfg.enabled {
-            Mode::Active
-        } else {
-            Mode::Paused
-        };
+        let mode = cfg.initial_mode();
         let model = TrayModel {
             mode,
             diagnostic: false,
             keyboard_suppressed: 0,
             mouse_suppressed: 0,
             confirm_on_quit: cfg.confirm_on_quit,
-            panic_hotkey: cfg.panic_hotkey.clone(),
+            panic_hotkey: hotkey::display(&cfg.panic_hotkey.keys()),
         };
 
         let menu = Menu::new();
@@ -179,7 +175,7 @@ impl BouncerApp {
             keyboard_suppressed: self.stats.keyboard_suppressed(),
             mouse_suppressed: self.stats.mouse_suppressed(),
             confirm_on_quit: self.applied.confirm_on_quit,
-            panic_hotkey: self.applied.panic_hotkey.clone(),
+            panic_hotkey: hotkey::display(&self.applied.panic_hotkey.keys()),
         }
     }
 
@@ -197,21 +193,10 @@ impl BouncerApp {
         }
     }
 
-    /// Push the applied thresholds (a disabled device class debounces at 0 ms, i.e.
-    /// never suppresses) to the engine.
+    /// Push the applied thresholds (projected by `Config`, so a disabled device class
+    /// is 0 ms = never suppresses) to the engine.
     fn apply_thresholds(&self) {
-        self.send(Command::SetThresholds {
-            keyboard_ms: if self.applied.debounce_keyboard {
-                self.applied.keyboard_threshold_ms
-            } else {
-                0
-            },
-            mouse_ms: if self.applied.debounce_mouse {
-                self.applied.mouse_threshold_ms
-            } else {
-                0
-            },
-        });
+        self.send(Command::SetThresholds(self.applied.thresholds()));
     }
 
     /// Whether the form has edits not yet committed to `applied`.
@@ -230,9 +215,8 @@ impl BouncerApp {
             let _ = crate::platform::autostart::set_autostart(self.applied.autostart);
         }
         if hotkey_changed {
-            if let Ok(chord) = hotkey::parse(&self.applied.panic_hotkey) {
-                self.send(Command::RebindPanic(chord));
-            }
+            // The chord is already typed and validated — apply it directly.
+            self.send(Command::RebindPanic(self.applied.panic_hotkey.clone()));
         }
         self.save_config();
     }
@@ -540,7 +524,7 @@ impl BouncerApp {
 
         ui.horizontal(|ui| {
             ui.label("Panic hotkey:");
-            ui.monospace(&self.draft.panic_hotkey);
+            ui.monospace(hotkey::display(&self.draft.panic_hotkey.keys()));
         });
         if !self.rebinding {
             if ui.button("Rebind…").clicked() {
@@ -556,10 +540,15 @@ impl BouncerApp {
                 hotkey::display(&keys)
             });
             ui.horizontal(|ui| {
-                let valid = self.rebind_candidate.chord().is_ok();
+                let candidate = self.rebind_candidate.chord();
                 // Accept only stages the chord into the draft; Save applies it.
-                if ui.add_enabled(valid, egui::Button::new("Accept")).clicked() {
-                    self.draft.panic_hotkey = hotkey::display(&self.rebind_candidate.keys());
+                if ui
+                    .add_enabled(candidate.is_ok(), egui::Button::new("Accept"))
+                    .clicked()
+                {
+                    if let Ok(chord) = candidate {
+                        self.draft.panic_hotkey = chord;
+                    }
                     self.rebinding = false;
                 }
                 if ui.button("Cancel").clicked() {
