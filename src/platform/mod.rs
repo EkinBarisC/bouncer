@@ -30,5 +30,8 @@ pub trait HookBackend {
 pub mod autostart;
 #[cfg(windows)]
 pub mod single_instance;
+/// Pure hook-eviction watchdog policy — OS-free, so it compiles and tests on every
+/// platform; the probe + reinstall that drive it live in `windows.rs`.
+pub mod watchdog;
 #[cfg(windows)]
 pub mod windows;
