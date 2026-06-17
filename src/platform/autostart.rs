@@ -34,14 +34,3 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         }
     }
 }
-
-/// Whether the Run-key value currently exists.
-pub fn is_autostart_enabled() -> bool {
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
-
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(RUN_KEY)
-        .and_then(|run| run.get_value::<String, _>(VALUE_NAME))
-        .is_ok()
-}
