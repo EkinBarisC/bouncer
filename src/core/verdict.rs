@@ -16,4 +16,9 @@ pub enum Verdict {
 pub struct Outcome {
     pub verdict: Verdict,
     pub mode_change: Option<Mode>,
+    /// `Some(gap_ms)` when this event was suppressed as *chatter* (the suppressed
+    /// down, carrying its measured gap) — the payload for `Report::Suppressed`.
+    /// `None` for the discarded paired up and for panic-chord consumes, so one
+    /// chatter incident reports exactly once and the hotkey never counts.
+    pub chatter_gap_ms: Option<u64>,
 }
