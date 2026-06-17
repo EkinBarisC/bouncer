@@ -19,6 +19,16 @@ pub struct Thresholds {
 }
 
 impl Thresholds {
+    /// Both thresholds clamped to `MAX_THRESHOLD_MS`. Applied at every entry point
+    /// that sets thresholds (config load and the live `SetThresholds` command), so a
+    /// hand-edited `threshold = 9999` can never black-hole the keyboard (DESIGN.md §6).
+    pub fn clamped(self) -> Thresholds {
+        Thresholds {
+            keyboard_ms: self.keyboard_ms.min(MAX_THRESHOLD_MS),
+            mouse_ms: self.mouse_ms.min(MAX_THRESHOLD_MS),
+        }
+    }
+
     /// The effective threshold for a device, clamped to `MAX_THRESHOLD_MS` so a
     /// bad value can never widen the window into an input black hole.
     fn for_device(self, device: Device) -> u64 {
@@ -187,6 +197,18 @@ mod tests {
             mouse.decide(mouse_down(LMB, 35), THR),
             Decision::SuppressChatter { gap_ms: 35 } // 35 < 40 → chatter
         );
+    }
+
+    // 8b. `clamped()` caps both fields at MAX_THRESHOLD_MS and leaves in-range values.
+    #[test]
+    fn clamped_caps_both_thresholds() {
+        let c = Thresholds {
+            keyboard_ms: 250,
+            mouse_ms: 30,
+        }
+        .clamped();
+        assert_eq!(c.keyboard_ms, MAX_THRESHOLD_MS);
+        assert_eq!(c.mouse_ms, 30);
     }
 
     // 9. A threshold above the cap behaves as the cap (clamped to MAX_THRESHOLD_MS = 100).

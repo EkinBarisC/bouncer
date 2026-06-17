@@ -21,7 +21,7 @@ pub enum Command {
 }
 
 /// Hook thread -> UI thread.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Report {
     /// Sent once when the backend's message loop is up. Carries the hook thread id
     /// so the UI can `post_wake` it after sending a `Command` (low-level hooks don't

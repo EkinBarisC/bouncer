@@ -161,6 +161,39 @@ mod tests {
         assert_eq!(c.keyboard_threshold_ms, 25);
     }
 
+    // --- defensive edge cases (#12): wrong types / out-of-range never crash ---
+
+    // 6a. A wrong-typed field (string where a number is expected) falls back to
+    //     defaults rather than panicking.
+    #[test]
+    fn wrong_typed_field_falls_back_to_defaults() {
+        let c = Config::load_from_str(r#"keyboard_threshold_ms = "not a number""#);
+        assert_eq!(c, Config::default());
+    }
+
+    // 6b. A float for an integer field, and a negative for an unsigned field, both
+    //     load defensively (no crash).
+    #[test]
+    fn float_and_negative_numbers_do_not_crash() {
+        assert_eq!(
+            Config::load_from_str("mouse_threshold_ms = 3.5"),
+            Config::default()
+        );
+        assert_eq!(
+            Config::load_from_str("keyboard_threshold_ms = -10"),
+            Config::default()
+        );
+    }
+
+    // 6c. A wrong-typed boolean field is tolerated too.
+    #[test]
+    fn wrong_typed_bool_field_does_not_crash() {
+        assert_eq!(
+            Config::load_from_str(r#"enabled = "yes""#),
+            Config::default()
+        );
+    }
+
     // --- file lifecycle (#10) ---
 
     /// A unique scratch path under the OS temp dir, removed when the guard drops.

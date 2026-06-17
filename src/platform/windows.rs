@@ -10,19 +10,27 @@
 use crate::core::Engine;
 use crate::core::{Device, EventKind, InputEvent, Thresholds, Verdict};
 use crate::messages::{Command, Report};
+use crate::platform::watchdog::{Health, Watchdog, WatchdogAction};
 use crate::platform::{BackendError, HookBackend};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, LASTINPUTINFO, VIRTUAL_KEY,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, HHOOK, HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
-    LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOWS_HOOK_ID, WM_APP,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, KillTimer, PostThreadMessageW, SetTimer,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, HOOKPROC, KBDLLHOOKSTRUCT,
+    LLKHF_INJECTED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINDOWS_HOOK_ID, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 // Mouse-button `KeyId`s — the standard mouse virtual-key codes, so they never
@@ -32,6 +40,27 @@ const MOUSE_RIGHT: u32 = 0x02;
 const MOUSE_MIDDLE: u32 = 0x04;
 const MOUSE_X1: u32 = 0x05;
 const MOUSE_X2: u32 = 0x06;
+
+// --- Eviction watchdog (issue #12) ---
+//
+// Windows evicts a low-level hook whose callback overruns `LowLevelHooksTimeout`,
+// silently — the hook just stops firing. We probe liveness by injecting a benign
+// sentinel key and checking the keyboard hook still sees it; if it doesn't, we
+// reinstall. The probe is *idle-aware* (skipped when the user is already idle) so
+// synthetic input never resets the system idle timer and blocks sleep.
+
+/// How often the watchdog probes hook liveness.
+const WATCHDOG_INTERVAL_MS: u32 = 5_000;
+/// Skip the probe (and its synthetic input) once the user has been idle this long,
+/// so the watchdog never keeps an otherwise-idle machine awake.
+const WATCHDOG_IDLE_SKIP_MS: u32 = 15_000;
+/// The sentinel virtual-key injected by the probe. `0xFF` is reserved/unassigned,
+/// so no application reacts to it even if a dead hook lets it reach the foreground.
+const WATCHDOG_SENTINEL_VK: u32 = 0xFF;
+
+/// Set by the keyboard hook when it observes the sentinel — i.e. the hook is alive.
+/// Read-and-reset by the watchdog tick on the hook thread.
+static SENTINEL_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Per-hook-thread decision state, reached by the C callbacks through a
 /// `thread_local`. Owns the Engine so the hot path never crosses a lock.
@@ -45,6 +74,21 @@ pub(crate) struct HookState {
 
 thread_local! {
     static HOOK_STATE: RefCell<Option<HookState>> = const { RefCell::new(None) };
+}
+
+/// The live hook handles, kept so the watchdog can reinstall them in place without
+/// disturbing the engine state in `HOOK_STATE`.
+struct HookHandles {
+    keyboard: HHOOK,
+    mouse: HHOOK,
+}
+
+thread_local! {
+    static HOOK_HANDLES: RefCell<Option<HookHandles>> = const { RefCell::new(None) };
+    static WATCHDOG: RefCell<Watchdog> = RefCell::new(Watchdog::new());
+    /// Whether a sentinel was injected on the previous active tick (so the next tick
+    /// has a result to evaluate). Cleared while idle, to re-prime on return.
+    static WATCHDOG_PRIMED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Run one event through the Engine and return its verdict. Shared by both hook
@@ -90,6 +134,12 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
     }
     // SAFETY: for `WH_KEYBOARD_LL`, `lparam` is a pointer to a `KBDLLHOOKSTRUCT`.
     let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+    // The watchdog's liveness sentinel: flag that the hook fired and pass it on
+    // (never run it through the Engine).
+    if info.vkCode == WATCHDOG_SENTINEL_VK {
+        SENTINEL_SEEN.store(true, Ordering::Relaxed);
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    }
     let kind = match wparam.0 as u32 {
         WM_KEYDOWN | WM_SYSKEYDOWN => EventKind::Down,
         WM_KEYUP | WM_SYSKEYUP => EventKind::Up,
@@ -216,6 +266,9 @@ impl HookBackend for WindowsBackend {
         let thread_id = unsafe { GetCurrentThreadId() };
         let _ = reports.send(Report::BackendReady { thread_id });
 
+        // The watchdog reports eviction/reinstall on its own; keep a sender for it.
+        let watch_reports = reports.clone();
+
         set_hook_state(HookState {
             engine,
             reports,
@@ -223,12 +276,24 @@ impl HookBackend for WindowsBackend {
         });
         let keyboard = install_keyboard_hook()?;
         let mouse = install_mouse_hook()?;
+        HOOK_HANDLES.with(|h| *h.borrow_mut() = Some(HookHandles { keyboard, mouse }));
 
-        let result = pump_messages(&commands);
+        // A periodic thread timer drives the eviction watchdog (WM_TIMER below).
+        let timer = unsafe { SetTimer(None, 0, WATCHDOG_INTERVAL_MS, None) };
 
-        unsafe {
-            let _ = UnhookWindowsHookEx(mouse);
-            let _ = UnhookWindowsHookEx(keyboard);
+        let result = pump_messages(&commands, &watch_reports);
+
+        if timer != 0 {
+            unsafe {
+                let _ = KillTimer(None, timer);
+            }
+        }
+        // Unhook whatever handles are current (the watchdog may have reinstalled them).
+        if let Some(h) = HOOK_HANDLES.with(|h| h.borrow_mut().take()) {
+            unsafe {
+                let _ = UnhookWindowsHookEx(h.mouse);
+                let _ = UnhookWindowsHookEx(h.keyboard);
+            }
         }
         clear_hook_state();
         result
@@ -237,8 +302,12 @@ impl HookBackend for WindowsBackend {
 
 /// Run the OS message loop until `WM_QUIT` or a `Command::Shutdown`. The loop is
 /// woken for commands by `post_wake` (`PostThreadMessageW`); input events are
-/// delivered to the hook callbacks by the OS while we block in `GetMessageW`.
-fn pump_messages(commands: &Receiver<Command>) -> Result<(), BackendError> {
+/// delivered to the hook callbacks by the OS while we block in `GetMessageW`, and a
+/// `WM_TIMER` drives the eviction watchdog.
+fn pump_messages(
+    commands: &Receiver<Command>,
+    reports: &Sender<Report>,
+) -> Result<(), BackendError> {
     loop {
         let mut msg = MSG::default();
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -255,10 +324,100 @@ fn pump_messages(commands: &Receiver<Command>) -> Result<(), BackendError> {
             }
         }
 
+        if msg.message == WM_TIMER {
+            watchdog_tick(reports);
+        }
+
         unsafe {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+/// One eviction-watchdog probe. Skipped while the user is idle (so the synthetic
+/// sentinel never blocks system sleep); otherwise it evaluates the previous tick's
+/// sentinel, reinstalls the hooks if the keyboard hook stopped firing, and injects
+/// a fresh sentinel for the next tick.
+fn watchdog_tick(reports: &Sender<Report>) {
+    if user_idle() {
+        WATCHDOG_PRIMED.with(|p| p.set(false)); // re-prime on return, don't false-alarm
+        return;
+    }
+
+    // Only judge liveness once a sentinel from a prior active tick could be observed.
+    if WATCHDOG_PRIMED.with(|p| p.get()) {
+        let health = if SENTINEL_SEEN.swap(false, Ordering::Relaxed) {
+            Health::Alive
+        } else {
+            Health::Dead
+        };
+        let step = WATCHDOG.with(|w| w.borrow_mut().observe(health));
+        if let Some(report) = step.report {
+            let _ = reports.send(report);
+        }
+        if step.action == WatchdogAction::Reinstall {
+            reinstall_hooks();
+        }
+    }
+
+    inject_sentinel();
+    WATCHDOG_PRIMED.with(|p| p.set(true));
+}
+
+/// Reinstall both hooks in place (the engine state in `HOOK_STATE` is untouched, so
+/// debounce timing survives). Best-effort: a failed install leaves the dead handle,
+/// and the next probe retries.
+fn reinstall_hooks() {
+    HOOK_HANDLES.with(|h| {
+        let mut slot = h.borrow_mut();
+        if let Some(handles) = slot.as_mut() {
+            unsafe {
+                let _ = UnhookWindowsHookEx(handles.keyboard);
+                let _ = UnhookWindowsHookEx(handles.mouse);
+            }
+            if let Ok(kb) = install_keyboard_hook() {
+                handles.keyboard = kb;
+            }
+            if let Ok(ms) = install_mouse_hook() {
+                handles.mouse = ms;
+            }
+        }
+    });
+}
+
+/// Inject the benign sentinel key (down+up) so a live keyboard hook flags itself.
+fn inject_sentinel() {
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(WATCHDOG_SENTINEL_VK as u16),
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Whether the user has been idle longer than [`WATCHDOG_IDLE_SKIP_MS`]. Failing to
+/// read idle time falls back to "not idle" (probe anyway — safety over battery).
+fn user_idle() -> bool {
+    let mut lii = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    if unsafe { GetLastInputInfo(&mut lii) }.as_bool() {
+        let now = unsafe { GetTickCount() };
+        now.wrapping_sub(lii.dwTime) > WATCHDOG_IDLE_SKIP_MS
+    } else {
+        false
     }
 }
 
@@ -342,5 +501,49 @@ mod tests {
             }] => {}
             other => panic!("expected exactly one Suppressed{{A, gap 5}} report, got {other:?}"),
         }
+    }
+
+    // --- fail-open audit (#12): the wired hot path passes on any doubt ---
+
+    /// With no hook state installed, the callback path must fail open (pass), never
+    /// suppress — a half-initialised or torn-down backend can't swallow input.
+    #[test]
+    fn decide_fails_open_when_no_hook_state() {
+        clear_hook_state();
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Down, false, 0),
+            Verdict::Pass
+        );
+        assert_eq!(
+            decide(Device::Mouse, A, EventKind::Down, false, 0),
+            Verdict::Pass
+        );
+    }
+
+    /// In production (`process_injected = false`) an injected event always passes —
+    /// even one timed as chatter — because chatter is physical (DESIGN.md D12).
+    #[test]
+    fn injected_events_pass_through_in_production() {
+        let (tx, _rx) = mpsc::channel();
+        set_hook_state(HookState {
+            engine: Engine::new(),
+            reports: tx,
+            process_injected: false,
+        });
+
+        // A chatter-timed sequence, but flagged injected → never suppressed.
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Down, true, 0),
+            Verdict::Pass
+        );
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Up, true, 0),
+            Verdict::Pass
+        );
+        assert_eq!(
+            decide(Device::Keyboard, A, EventKind::Down, true, 5),
+            Verdict::Pass
+        );
+        clear_hook_state();
     }
 }

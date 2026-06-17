@@ -47,5 +47,5 @@ panic = "abort"
 # so its heavy GUI deps live here rather than in the cross-platform set.
 eframe = "0.34.3"
 tray-icon = "0.24.0"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_LibraryLoader"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_System_SystemInformation"] }
 winreg = "0.56.0"

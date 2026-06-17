@@ -45,9 +45,10 @@ impl Engine {
     }
 
     /// Set the active chatter thresholds. The shell calls this on a `SetThresholds`
-    /// command (and once at startup from the loaded `Config`).
+    /// command (and once at startup from the loaded `Config`). Thresholds are clamped
+    /// here so the cap holds at this entry point regardless of the caller (DESIGN.md §6).
     pub fn set_thresholds(&mut self, thresholds: Thresholds) {
-        self.thresholds = thresholds;
+        self.thresholds = thresholds.clamped();
     }
 
     /// Swap in a new panic chord (a live rebind from the Settings window).
@@ -226,6 +227,21 @@ mod tests {
         let out = press_panic_chord(&mut e, 1000);
         assert_eq!(out.verdict, Verdict::Suppress);
         assert_eq!(out.chatter_gap_ms, None);
+    }
+
+    // 10. set_thresholds clamps at the entry point: an out-of-range live SetThresholds
+    //     can't widen the suppression window past the cap (DESIGN.md §6).
+    #[test]
+    fn set_thresholds_clamps_to_the_cap() {
+        let mut e = Engine::new();
+        e.set_thresholds(Thresholds {
+            keyboard_ms: 250, // would suppress a 150 ms gap if honored…
+            mouse_ms: 40,
+        });
+        // …but clamped to 100 ms, so a 150 ms re-press is legitimate input.
+        assert_eq!(e.on_event(down(A, 0)).verdict, Verdict::Pass);
+        assert_eq!(e.on_event(up(A, 0)).verdict, Verdict::Pass);
+        assert_eq!(e.on_event(down(A, 150)).verdict, Verdict::Pass);
     }
 
     // --- Fail-open property tests (the safety invariant) ---
