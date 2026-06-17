@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -18,9 +18,10 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::config::Config;
 use crate::core::event::EventKind;
-use crate::core::{Device, KeyId, Mode};
+use crate::core::{KeyId, Mode};
 use crate::messages::{Command, Report};
 use crate::platform::windows::post_wake;
+use crate::stats::{Stats, HISTOGRAM_BUCKETS, HISTOGRAM_BUCKET_MS};
 use crate::ui::hotkey;
 use crate::ui::rebind::RebindCapture;
 use crate::ui::tray::{
@@ -76,8 +77,9 @@ struct BouncerApp {
 
     mode: Mode,
     diagnostic: bool,
-    kb_count: u64,
-    mouse_count: u64,
+    /// UI-side observability: session counters + diagnostic ring buffer + histogram,
+    /// folded from the `Report` stream (never the Engine, per ADR-0001).
+    stats: Stats,
 
     tray: TrayIcon,
     items: MenuItems,
@@ -152,8 +154,7 @@ impl BouncerApp {
             backend_thread_id: None,
             mode,
             diagnostic: false,
-            kb_count: 0,
-            mouse_count: 0,
+            stats: Stats::new(),
             last_icon: Some(model.icon()),
             tray,
             items: MenuItems {
@@ -175,8 +176,8 @@ impl BouncerApp {
         TrayModel {
             mode: self.mode,
             diagnostic: self.diagnostic,
-            keyboard_suppressed: self.kb_count,
-            mouse_suppressed: self.mouse_count,
+            keyboard_suppressed: self.stats.keyboard_suppressed(),
+            mouse_suppressed: self.stats.mouse_suppressed(),
             confirm_on_quit: self.applied.confirm_on_quit,
             panic_hotkey: self.applied.panic_hotkey.clone(),
         }
@@ -287,6 +288,12 @@ impl BouncerApp {
             }
             TrayEffect::SetDiagnostic(on) => {
                 self.diagnostic = on;
+                // Drive the ring buffer's recording window (auto-expires after 1 h).
+                if on {
+                    self.stats.start_recording(Instant::now());
+                } else {
+                    self.stats.stop_recording();
+                }
                 self.send(Command::SetDiagnostic(on));
             }
             TrayEffect::OpenSettings => {
@@ -312,16 +319,26 @@ impl BouncerApp {
 
     /// Drain hook-thread reports into the live UI state.
     fn drain_reports(&mut self) {
+        let now = Instant::now();
         while let Ok(report) = self.reports.try_recv() {
             match report {
                 Report::BackendReady { thread_id } => self.backend_thread_id = Some(thread_id),
                 Report::ModeChanged(m) => self.mode = m,
-                Report::Suppressed { device, .. } => match device {
-                    Device::Keyboard => self.kb_count += 1,
-                    Device::Mouse => self.mouse_count += 1,
-                },
                 Report::HookEvicted | Report::HookReinstalled => {}
+                // Counters + diagnostic ring buffer + histogram all live in Stats.
+                Report::Suppressed { .. } => self.stats.record(&report, now),
             }
+        }
+    }
+
+    /// If diagnostic recording reached its 1-hour TTL, switch it off: clear the
+    /// buffer (DESIGN.md §7 — cleared on timeout), drop the badge, and tell the
+    /// engine. Counters are untouched.
+    fn expire_diagnostic(&mut self) {
+        if self.diagnostic && !self.stats.is_recording(Instant::now()) {
+            self.diagnostic = false;
+            self.stats.clear();
+            self.send(Command::SetDiagnostic(false));
         }
     }
 
@@ -420,7 +437,8 @@ impl BouncerApp {
         });
         ui.label(format!(
             "Suppressed this session — {} keyboard · {} mouse",
-            self.kb_count, self.mouse_count
+            self.stats.keyboard_suppressed(),
+            self.stats.mouse_suppressed()
         ));
         let btn = self.tray_model().pause_resume_label();
         if ui.button(btn).clicked() {
@@ -449,7 +467,71 @@ impl BouncerApp {
                 self.execute(effect, ctx);
             }
         });
-        ui.weak("Gap histogram & ring buffer arrive in #11.");
+
+        // Recording indicator + auto-expiry countdown.
+        if let Some(left) = self.stats.time_remaining(Instant::now()) {
+            let mins = left.as_secs() / 60;
+            let secs = left.as_secs() % 60;
+            ui.colored_label(
+                egui::Color32::from_rgb(0xD2, 0x28, 0x28),
+                format!("● Recording — auto-stops in {mins}:{secs:02}"),
+            );
+        } else if !enabled {
+            ui.weak("Diagnostic mode is available only while Active.");
+        }
+
+        // The suppression-gap histogram, with a line marking the keyboard threshold.
+        let samples = self.stats.samples().len();
+        if samples == 0 {
+            ui.weak("No suppressions recorded yet — gaps appear here while recording.");
+        } else {
+            self.draw_histogram(ui);
+            ui.horizontal(|ui| {
+                ui.label(format!("{samples} samples"));
+                if ui.button("Clear").clicked() {
+                    self.stats.clear();
+                }
+            });
+        }
+    }
+
+    /// Paint the gap histogram: one bar per [`HISTOGRAM_BUCKETS`] bucket, plus a
+    /// vertical line at the current keyboard threshold so the user can see how their
+    /// setting sits against the real suppressed-gap distribution.
+    fn draw_histogram(&self, ui: &mut egui::Ui) {
+        let bins = self.stats.histogram();
+        let peak = bins.iter().copied().max().unwrap_or(0).max(1) as f32;
+
+        let span = (HISTOGRAM_BUCKETS as u64 * HISTOGRAM_BUCKET_MS) as f32; // 100 ms
+        let desired = egui::vec2(ui.available_width().min(380.0), 70.0);
+        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        let bar_w = rect.width() / HISTOGRAM_BUCKETS as f32;
+
+        for (i, &count) in bins.iter().enumerate() {
+            let h = (count as f32 / peak) * rect.height();
+            let x0 = rect.left() + i as f32 * bar_w;
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(x0 + 1.0, rect.bottom() - h),
+                egui::pos2(x0 + bar_w - 1.0, rect.bottom()),
+            );
+            painter.rect_filled(bar, 0.0, egui::Color32::from_rgb(0x00, 0xA0, 0x82));
+        }
+
+        // Threshold marker (keyboard): a vertical line at threshold/span across.
+        let threshold = self.applied.keyboard_threshold_ms as f32;
+        let tx = rect.left() + (threshold / span).clamp(0.0, 1.0) * rect.width();
+        painter.line_segment(
+            [egui::pos2(tx, rect.top()), egui::pos2(tx, rect.bottom())],
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(0xD2, 0x28, 0x28)),
+        );
+        painter.text(
+            egui::pos2(tx + 3.0, rect.top()),
+            egui::Align2::LEFT_TOP,
+            format!("{}ms", self.applied.keyboard_threshold_ms),
+            egui::FontId::proportional(11.0),
+            egui::Color32::from_rgb(0xD2, 0x28, 0x28),
+        );
     }
 
     fn draw_settings_group(&mut self, ui: &mut egui::Ui) {
@@ -548,6 +630,7 @@ impl eframe::App for BouncerApp {
     /// tray keeps responding when only the icon is visible.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_reports();
+        self.expire_diagnostic();
         self.drain_tray_events(ctx);
         if self.rebinding {
             self.capture_rebind(ctx);
