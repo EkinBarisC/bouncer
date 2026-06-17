@@ -166,9 +166,11 @@ mod tests {
 
     #[test]
     fn reset_to_defaults_keeps_the_live_pause_state() {
-        let mut applied = Config::default();
-        applied.enabled = false; // user is Paused
-        applied.keyboard_threshold_ms = 99;
+        let applied = Config {
+            enabled: false, // user is Paused
+            keyboard_threshold_ms: 99,
+            ..Config::default()
+        };
         let mut form = SettingsForm::new(applied);
 
         form.reset_to_defaults();
