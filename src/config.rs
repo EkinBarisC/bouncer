@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::core::hotkey;
+use crate::core::{Mode, PanicChord, Thresholds};
+
 /// The hard cap applied to both thresholds, so a hand-edited config can't turn
 /// Bouncer into an input black hole (DESIGN.md §6, §8).
 pub const MAX_THRESHOLD_MS: u8 = 100;
@@ -19,9 +22,17 @@ pub struct Config {
     pub debounce_keyboard: bool,
     pub debounce_mouse: bool,
     pub autostart: bool,
-    /// Placeholder representation; becomes a typed chord in #4/#9.
-    pub panic_hotkey: String,
+    /// The panic chord, validated. Stored typed (not a raw string) so the invariant
+    /// "valid chord" holds at the config seam; it (de)serializes as a hotkey string
+    /// like `Ctrl+Alt+Shift+F12` via [`hotkey`].
+    #[serde(serialize_with = "serialize_chord")]
+    pub panic_hotkey: PanicChord,
     pub confirm_on_quit: bool,
+}
+
+/// Serialize a [`PanicChord`] as its human-readable hotkey string (the on-disk form).
+fn serialize_chord<S: serde::Serializer>(chord: &PanicChord, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&hotkey::display(&chord.keys()))
 }
 
 impl Default for Config {
@@ -33,7 +44,7 @@ impl Default for Config {
             debounce_keyboard: true,
             debounce_mouse: true,
             autostart: true,
-            panic_hotkey: "Ctrl+Alt+Shift+F12".to_string(),
+            panic_hotkey: PanicChord::default_chord(),
             confirm_on_quit: true,
         }
     }
@@ -59,7 +70,12 @@ impl Config {
             debounce_keyboard: raw.debounce_keyboard.unwrap_or(d.debounce_keyboard),
             debounce_mouse: raw.debounce_mouse.unwrap_or(d.debounce_mouse),
             autostart: raw.autostart.unwrap_or(d.autostart),
-            panic_hotkey: raw.panic_hotkey.unwrap_or(d.panic_hotkey),
+            // Parse the stored hotkey string; an absent or unparseable/invalid chord
+            // falls back to the default (defensive load — never fails).
+            panic_hotkey: raw
+                .panic_hotkey
+                .and_then(|s| hotkey::parse(&s).ok())
+                .unwrap_or_else(PanicChord::default_chord),
             confirm_on_quit: raw.confirm_on_quit.unwrap_or(d.confirm_on_quit),
         }
     }
@@ -92,6 +108,34 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, self.to_toml_string())
+    }
+
+    /// The engine [`Thresholds`] these settings imply. A disabled device class maps
+    /// to a 0 ms threshold (never suppresses) — the single home for that rule, shared
+    /// by startup and the live `SetThresholds` command.
+    pub fn thresholds(&self) -> Thresholds {
+        Thresholds {
+            keyboard_ms: if self.debounce_keyboard {
+                self.keyboard_threshold_ms
+            } else {
+                0
+            },
+            mouse_ms: if self.debounce_mouse {
+                self.mouse_threshold_ms
+            } else {
+                0
+            },
+        }
+    }
+
+    /// The [`Mode`] the engine should start in: `Active` when protection is enabled,
+    /// `Paused` when the user left it off (persisted pass-through).
+    pub fn initial_mode(&self) -> Mode {
+        if self.enabled {
+            Mode::Active
+        } else {
+            Mode::Paused
+        }
     }
 }
 
@@ -159,6 +203,90 @@ mod tests {
     fn unknown_keys_are_ignored() {
         let c = Config::load_from_str("keyboard_threshold_ms = 25\nbogus_field = \"ignored\"");
         assert_eq!(c.keyboard_threshold_ms, 25);
+    }
+
+    // --- Config → engine projections (deepen Config) ---
+
+    // The Config → Thresholds projection: a disabled device class becomes 0 ms.
+    #[test]
+    fn thresholds_zeroes_disabled_device_classes() {
+        let c = Config {
+            keyboard_threshold_ms: 30,
+            mouse_threshold_ms: 40,
+            debounce_keyboard: true,
+            debounce_mouse: false,
+            ..Config::default()
+        };
+        assert_eq!(
+            c.thresholds(),
+            Thresholds {
+                keyboard_ms: 30,
+                mouse_ms: 0
+            }
+        );
+    }
+
+    #[test]
+    fn thresholds_pass_through_when_both_enabled() {
+        let c = Config {
+            keyboard_threshold_ms: 12,
+            mouse_threshold_ms: 8,
+            debounce_keyboard: true,
+            debounce_mouse: true,
+            ..Config::default()
+        };
+        assert_eq!(
+            c.thresholds(),
+            Thresholds {
+                keyboard_ms: 12,
+                mouse_ms: 8
+            }
+        );
+    }
+
+    // The Config → Mode projection: enabled ⇒ Active, disabled ⇒ Paused.
+    #[test]
+    fn initial_mode_reflects_enabled() {
+        assert_eq!(
+            Config {
+                enabled: true,
+                ..Config::default()
+            }
+            .initial_mode(),
+            Mode::Active
+        );
+        assert_eq!(
+            Config {
+                enabled: false,
+                ..Config::default()
+            }
+            .initial_mode(),
+            Mode::Paused
+        );
+    }
+
+    // --- typed panic_hotkey (deepen Config) ---
+
+    // The chord round-trips through TOML as its hotkey string.
+    #[test]
+    fn panic_hotkey_round_trips_as_a_chord() {
+        let cfg = Config {
+            panic_hotkey: hotkey::parse("Ctrl+Alt+Q").unwrap(),
+            ..Config::default()
+        };
+        let reparsed = Config::load_from_str(&cfg.to_toml_string());
+        assert_eq!(reparsed.panic_hotkey, cfg.panic_hotkey);
+    }
+
+    // A stored hotkey that no longer parses (or is invalid) falls back to the default
+    // chord rather than failing the whole load.
+    #[test]
+    fn unparseable_panic_hotkey_falls_back_to_default_chord() {
+        let c = Config::load_from_str(r#"panic_hotkey = "Ctrl+Banana""#);
+        assert_eq!(c.panic_hotkey, PanicChord::default_chord());
+        // A bare key with no modifier is a parseable token list but an invalid chord.
+        let c = Config::load_from_str(r#"panic_hotkey = "F12""#);
+        assert_eq!(c.panic_hotkey, PanicChord::default_chord());
     }
 
     // --- defensive edge cases (#12): wrong types / out-of-range never crash ---
@@ -236,7 +364,7 @@ mod tests {
         let cfg = Config {
             keyboard_threshold_ms: 17,
             confirm_on_quit: false,
-            panic_hotkey: "Ctrl+Shift+Pause".to_string(),
+            panic_hotkey: hotkey::parse("Ctrl+Shift+B").unwrap(),
             ..Config::default()
         };
 
