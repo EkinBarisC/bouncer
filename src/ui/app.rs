@@ -24,6 +24,7 @@ use crate::messages::{Command, Report};
 use crate::platform::windows::post_wake;
 use crate::stats::{Stats, HISTOGRAM_BUCKETS, HISTOGRAM_BUCKET_MS};
 use crate::ui::rebind::RebindCapture;
+use crate::ui::settings::SettingsForm;
 use crate::ui::tray::{
     icon_rgba, resolve_quit_dialog, IconState, QuitResolution, TrayAction, TrayEffect, TrayModel,
     ICON_SIZE,
@@ -64,12 +65,9 @@ struct MenuItems {
 }
 
 struct BouncerApp {
-    /// The committed, on-disk settings that drive the live engine.
-    applied: Config,
-    /// The edit buffer the Settings form mutates; committed by Save, discarded by
-    /// Cancel. (`enabled` is kept equal to `applied` — Pause/Resume owns it, not the
-    /// form — so it never counts as an unsaved change.)
-    draft: Config,
+    /// The Settings-form model: committed (`applied`) vs draft, dirty tracking, and
+    /// the commit/cancel/reset rules. See [`SettingsForm`].
+    form: SettingsForm,
     cfg_path: Option<PathBuf>,
     cmd_tx: Sender<Command>,
     reports: Receiver<Report>,
@@ -143,8 +141,7 @@ impl BouncerApp {
 
         Ok(Self {
             cfg_path: Config::config_path(),
-            applied: cfg.clone(),
-            draft: cfg,
+            form: SettingsForm::new(cfg),
             cmd_tx,
             reports,
             backend_thread_id: None,
@@ -174,8 +171,8 @@ impl BouncerApp {
             diagnostic: self.diagnostic,
             keyboard_suppressed: self.stats.keyboard_suppressed(),
             mouse_suppressed: self.stats.mouse_suppressed(),
-            confirm_on_quit: self.applied.confirm_on_quit,
-            panic_hotkey: hotkey::display(&self.applied.panic_hotkey.keys()),
+            confirm_on_quit: self.form.applied().confirm_on_quit,
+            panic_hotkey: hotkey::display(&self.form.applied().panic_hotkey.keys()),
         }
     }
 
@@ -189,51 +186,35 @@ impl BouncerApp {
 
     fn save_config(&self) {
         if let Some(path) = &self.cfg_path {
-            let _ = self.applied.save_to_path(path);
+            let _ = self.form.applied().save_to_path(path);
         }
     }
 
-    /// Push the applied thresholds (projected by `Config`, so a disabled device class
-    /// is 0 ms = never suppresses) to the engine.
-    fn apply_thresholds(&self) {
-        self.send(Command::SetThresholds(self.applied.thresholds()));
-    }
-
-    /// Whether the form has edits not yet committed to `applied`.
-    fn is_dirty(&self) -> bool {
-        self.draft != self.applied
-    }
-
-    /// Commit the draft: apply changed settings to the live engine/OS and persist.
+    /// Commit the draft via the form, then carry out the side effects it reports:
+    /// push thresholds, (un)register autostart if it changed, re-arm the panic chord
+    /// if it changed, and persist.
     fn save_settings(&mut self) {
-        let autostart_changed = self.draft.autostart != self.applied.autostart;
-        let hotkey_changed = self.draft.panic_hotkey != self.applied.panic_hotkey;
-
-        self.applied = self.draft.clone();
-        self.apply_thresholds();
-        if autostart_changed {
-            let _ = crate::platform::autostart::set_autostart(self.applied.autostart);
+        let commit = self.form.commit();
+        self.send(Command::SetThresholds(commit.thresholds));
+        if let Some(on) = commit.autostart {
+            let _ = crate::platform::autostart::set_autostart(on);
         }
-        if hotkey_changed {
-            // The chord is already typed and validated — apply it directly.
-            self.send(Command::RebindPanic(self.applied.panic_hotkey.clone()));
+        if let Some(chord) = commit.panic_chord {
+            self.send(Command::RebindPanic(chord));
         }
         self.save_config();
     }
 
     /// Discard uncommitted edits.
     fn cancel_settings(&mut self) {
-        self.draft = self.applied.clone();
+        self.form.cancel();
         self.rebinding = false;
     }
 
-    /// Load factory defaults into the draft (preserving the live pause state, which
-    /// the form doesn't own). The user still reviews and Saves to apply.
+    /// Load factory defaults into the draft (the form preserves the live pause state).
+    /// The user still reviews and Saves to apply.
     fn reset_to_defaults(&mut self) {
-        self.draft = Config {
-            enabled: self.applied.enabled,
-            ..Config::default()
-        };
+        self.form.reset_to_defaults();
         self.rebinding = false;
     }
 
@@ -262,10 +243,9 @@ impl BouncerApp {
             TrayEffect::SetMode(m) => {
                 self.mode = m;
                 // Paused persists as `enabled = false`; Panic is never persisted.
-                // Keep draft in step so toggling pause never shows as a form edit.
+                // The form keeps applied+draft in step so pausing isn't a form edit.
                 if m != Mode::Panic {
-                    self.applied.enabled = m == Mode::Active;
-                    self.draft.enabled = self.applied.enabled;
+                    self.form.set_enabled(m == Mode::Active);
                     self.save_config();
                 }
                 self.send(Command::SetMode(m));
@@ -433,12 +413,11 @@ impl BouncerApp {
 
     fn draw_tuning(&mut self, ui: &mut egui::Ui) {
         ui.label("Tuning");
-        ui.checkbox(&mut self.draft.debounce_keyboard, "Debounce keyboard");
-        ui.add(
-            egui::Slider::new(&mut self.draft.keyboard_threshold_ms, 0..=100).text("ms keyboard"),
-        );
-        ui.checkbox(&mut self.draft.debounce_mouse, "Debounce mouse");
-        ui.add(egui::Slider::new(&mut self.draft.mouse_threshold_ms, 0..=100).text("ms mouse"));
+        let draft = self.form.draft_mut();
+        ui.checkbox(&mut draft.debounce_keyboard, "Debounce keyboard");
+        ui.add(egui::Slider::new(&mut draft.keyboard_threshold_ms, 0..=100).text("ms keyboard"));
+        ui.checkbox(&mut draft.debounce_mouse, "Debounce mouse");
+        ui.add(egui::Slider::new(&mut draft.mouse_threshold_ms, 0..=100).text("ms mouse"));
     }
 
     fn draw_diagnostics(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -503,7 +482,7 @@ impl BouncerApp {
         }
 
         // Threshold marker (keyboard): a vertical line at threshold/span across.
-        let threshold = self.applied.keyboard_threshold_ms as f32;
+        let threshold = self.form.applied().keyboard_threshold_ms as f32;
         let tx = rect.left() + (threshold / span).clamp(0.0, 1.0) * rect.width();
         painter.line_segment(
             [egui::pos2(tx, rect.top()), egui::pos2(tx, rect.bottom())],
@@ -512,7 +491,7 @@ impl BouncerApp {
         painter.text(
             egui::pos2(tx + 3.0, rect.top()),
             egui::Align2::LEFT_TOP,
-            format!("{}ms", self.applied.keyboard_threshold_ms),
+            format!("{}ms", self.form.applied().keyboard_threshold_ms),
             egui::FontId::proportional(11.0),
             egui::Color32::from_rgb(0xD2, 0x28, 0x28),
         );
@@ -520,11 +499,11 @@ impl BouncerApp {
 
     fn draw_settings_group(&mut self, ui: &mut egui::Ui) {
         ui.label("Settings");
-        ui.checkbox(&mut self.draft.autostart, "Start on login");
+        ui.checkbox(&mut self.form.draft_mut().autostart, "Start on login");
 
         ui.horizontal(|ui| {
             ui.label("Panic hotkey:");
-            ui.monospace(hotkey::display(&self.draft.panic_hotkey.keys()));
+            ui.monospace(hotkey::display(&self.form.draft().panic_hotkey.keys()));
         });
         if !self.rebinding {
             if ui.button("Rebind…").clicked() {
@@ -547,7 +526,7 @@ impl BouncerApp {
                     .clicked()
                 {
                     if let Ok(chord) = candidate {
-                        self.draft.panic_hotkey = chord;
+                        self.form.draft_mut().panic_hotkey = chord;
                     }
                     self.rebinding = false;
                 }
@@ -557,12 +536,15 @@ impl BouncerApp {
             });
         }
 
-        ui.checkbox(&mut self.draft.confirm_on_quit, "Confirm before quitting");
+        ui.checkbox(
+            &mut self.form.draft_mut().confirm_on_quit,
+            "Confirm before quitting",
+        );
     }
 
     /// The Save / Cancel / Reset row that commits or discards the draft.
     fn draw_actions(&mut self, ui: &mut egui::Ui) {
-        let dirty = self.is_dirty();
+        let dirty = self.form.is_dirty();
         ui.horizontal(|ui| {
             if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
                 self.save_settings();
@@ -595,8 +577,7 @@ impl BouncerApp {
                         } = resolve_quit_dialog(true, self.dont_ask_again)
                         {
                             if let Some(v) = new_confirm_on_quit {
-                                self.applied.confirm_on_quit = v;
-                                self.draft.confirm_on_quit = v;
+                                self.form.set_confirm_on_quit(v);
                                 self.save_config();
                             }
                             self.confirm_quit_open = false;

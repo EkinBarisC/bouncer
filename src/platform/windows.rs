@@ -177,8 +177,9 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 }
 
 /// Map a mouse message to `(kind, button-key)`; `None` for non-button events
-/// (move, wheel) which are never chatter.
-fn mouse_button(msg: u32, mouse_data: u32) -> Option<(EventKind, u32)> {
+/// (move, wheel) which are never chatter. `pub(crate)` so the integration-test
+/// observer shares this single source of truth for the `WM_*BUTTON*` mapping.
+pub(crate) fn mouse_button(msg: u32, mouse_data: u32) -> Option<(EventKind, u32)> {
     let pair = match msg {
         WM_LBUTTONDOWN => (EventKind::Down, MOUSE_LEFT),
         WM_LBUTTONUP => (EventKind::Up, MOUSE_LEFT),

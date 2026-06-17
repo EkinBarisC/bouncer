@@ -12,7 +12,7 @@
 //! The observer then **swallows the synthetic (injected) events** so they can't
 //! leak into a real foreground app, while letting real user input pass untouched.
 
-use crate::core::{Engine, Thresholds};
+use crate::core::{Engine, EventKind, Thresholds};
 use crate::platform::windows::{
     clear_hook_state, install_keyboard_hook, install_low_level_hook, install_mouse_hook,
     set_hook_state, HookState,
@@ -34,9 +34,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, TranslateMessage,
     UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
-    MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
 };
 
 /// One scripted synthetic key event to inject (flagged injected; the backend runs
@@ -126,32 +125,23 @@ unsafe extern "system" fn observer_mouse_proc(
     let injected = info.flags & LLMHF_INJECTED != 0;
 
     if injected {
-        if let Some((button, down)) = observed_button(wparam.0 as u32, info.mouseData) {
+        // Reuse the production `WM_*BUTTON*` mapping (one source of truth), adapting
+        // its `(EventKind, vk)` to the observer's `(button: u16, down: bool)`.
+        if let Some((kind, vk)) =
+            crate::platform::windows::mouse_button(wparam.0 as u32, info.mouseData)
+        {
             OBSERVER_MOUSE.with(|cell| {
                 if let Some(sink) = cell.borrow().as_ref() {
-                    let _ = sink.send(ObservedClick { button, down });
+                    let _ = sink.send(ObservedClick {
+                        button: vk as u16,
+                        down: kind == EventKind::Down,
+                    });
                 }
             });
             return LRESULT(1); // swallow our synthetic input
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
-/// Map a mouse message to `(button-vk, is_down)`; `None` for non-button events.
-fn observed_button(msg: u32, mouse_data: u32) -> Option<(u16, bool)> {
-    match msg {
-        WM_LBUTTONDOWN => Some((1, true)),
-        WM_LBUTTONUP => Some((1, false)),
-        WM_RBUTTONDOWN => Some((2, true)),
-        WM_RBUTTONUP => Some((2, false)),
-        WM_MBUTTONDOWN => Some((4, true)),
-        WM_MBUTTONUP => Some((4, false)),
-        // X button (1 or 2) is in the high word → mapped to vk 5 / 6.
-        WM_XBUTTONDOWN => Some((4 + (mouse_data >> 16) as u16, true)),
-        WM_XBUTTONUP => Some((4 + (mouse_data >> 16) as u16, false)),
-        _ => None,
-    }
 }
 
 /// Serializes runs: each installs *global* hooks and injects into the shared
