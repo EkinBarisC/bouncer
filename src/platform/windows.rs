@@ -16,6 +16,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
     TranslateMessage, UnhookWindowsHookEx, HHOOK, HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
@@ -202,6 +203,11 @@ impl HookBackend for WindowsBackend {
         commands: Receiver<Command>,
         reports: Sender<Report>,
     ) -> Result<(), BackendError> {
+        // Announce our thread id so the UI can wake this loop (`post_wake`) after
+        // sending a Command — best-effort, off the hot path.
+        let thread_id = unsafe { GetCurrentThreadId() };
+        let _ = reports.send(Report::BackendReady { thread_id });
+
         set_hook_state(HookState {
             engine,
             reports,
@@ -271,7 +277,10 @@ fn apply_command(cmd: Command) -> bool {
                 false
             }
             Command::SetDiagnostic(_) => false, // UI-side stats overlay (#11)
-            Command::RebindPanic(_) => false,   // typed chord rebind (#9)
+            Command::RebindPanic(chord) => {
+                state.engine.set_panic_chord(chord);
+                false
+            }
             Command::Shutdown => true,
         }
     })

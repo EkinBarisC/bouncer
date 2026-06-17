@@ -4,7 +4,7 @@
 //! a shared lock on the input path. Variants will gain real payloads as the slices
 //! that use them land (control in #9/#10, reports in #7/#11).
 
-use crate::core::{Device, KeyId, Mode};
+use crate::core::{Device, KeyId, Mode, PanicChord};
 
 /// UI thread -> hook thread.
 #[derive(Debug, Clone)]
@@ -15,14 +15,20 @@ pub enum Command {
     },
     SetMode(Mode),
     SetDiagnostic(bool),
-    /// New panic chord. Placeholder `String`; becomes a typed `Chord` in #4/#9.
-    RebindPanic(String),
+    /// New panic chord, captured + validated by the Settings rebind UI.
+    RebindPanic(PanicChord),
     Shutdown,
 }
 
 /// Hook thread -> UI thread.
 #[derive(Debug, Clone)]
 pub enum Report {
+    /// Sent once when the backend's message loop is up. Carries the hook thread id
+    /// so the UI can `post_wake` it after sending a `Command` (low-level hooks don't
+    /// post queue messages, so the loop must be woken to drain commands promptly).
+    BackendReady {
+        thread_id: u32,
+    },
     Suppressed {
         device: Device,
         key: KeyId,

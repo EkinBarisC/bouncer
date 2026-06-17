@@ -54,6 +54,11 @@ impl PanicChord {
         // 0x11 Ctrl, 0x12 Alt, 0x10 Shift, 0x7B F12.
         Self::new(&[0x11, 0x12, 0x10, 0x7B]).expect("default chord is valid")
     }
+
+    /// The chord's keys, ascending — for display and round-tripping through config.
+    pub fn keys(&self) -> Vec<KeyId> {
+        self.keys.iter().copied().collect()
+    }
 }
 
 /// What the detector reports for one event.
@@ -81,6 +86,14 @@ impl PanicDetector {
             held: HashSet::new(),
             was_full: false,
         }
+    }
+
+    /// Swap in a new chord (a live rebind). Resets the held-key tracking and edge
+    /// state so the change can't fire a spurious toggle.
+    pub fn set_chord(&mut self, chord: PanicChord) {
+        self.chord = chord;
+        self.held.clear();
+        self.was_full = false;
     }
 
     /// Feed one event; update the held-key set and report toggle/consume.

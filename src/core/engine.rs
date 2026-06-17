@@ -50,6 +50,11 @@ impl Engine {
         self.thresholds = thresholds;
     }
 
+    /// Swap in a new panic chord (a live rebind from the Settings window).
+    pub fn set_panic_chord(&mut self, chord: crate::core::panic::PanicChord) {
+        self.panic.set_chord(chord);
+    }
+
     /// The single synchronous decision for one input event.
     ///
     /// The `PanicDetector` observes *every* event (it must track held keys to see
@@ -183,6 +188,23 @@ mod tests {
         assert_eq!(e.on_event(down(A, 100)).verdict, Verdict::Pass);
         assert_eq!(e.on_event(up(A, 100)).verdict, Verdict::Pass);
         assert_eq!(e.on_event(down(A, 103)).verdict, Verdict::Pass);
+    }
+
+    // 8. A rebound chord toggles Panic; the old chord no longer does.
+    #[test]
+    fn rebound_chord_toggles_panic() {
+        use crate::core::panic::PanicChord;
+        let mut e = Engine::new();
+        e.set_panic_chord(PanicChord::new(&[CTRL, A]).unwrap());
+
+        // The old default chord (Ctrl+Alt+Shift+F12) no longer toggles.
+        assert_eq!(press_panic_chord(&mut e, 0).mode_change, None);
+
+        // The new chord (Ctrl+A) does.
+        e.on_event(down(CTRL, 10));
+        let out = e.on_event(down(A, 11));
+        assert_eq!(out.mode_change, Some(Mode::Panic));
+        assert_eq!(out.verdict, Verdict::Suppress); // completing key consumed
     }
 
     // --- Fail-open property tests (the safety invariant) ---

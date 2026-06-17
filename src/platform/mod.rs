@@ -27,4 +27,8 @@ pub trait HookBackend {
 }
 
 #[cfg(windows)]
+pub mod autostart;
+#[cfg(windows)]
+pub mod single_instance;
+#[cfg(windows)]
 pub mod windows;

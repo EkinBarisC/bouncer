@@ -1,6 +1,12 @@
 # cargo-deny configuration. Run with `cargo deny check`.
 # CI installs cargo-deny; locally `cargo install cargo-deny`.
 
+# Bouncer is Windows-only for v1 (DESIGN.md D1), so only audit the dependency tree
+# that actually ships. This excludes eframe's cross-platform leaves (x11, wayland,
+# objc, …) that are never compiled into the product.
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+
 [advisories]
 version = 2
 yanked = "deny"
@@ -12,7 +18,8 @@ wildcards = "deny"
 
 [licenses]
 version = 2
-# Bouncer ships under MIT OR Apache-2.0; allow the usual permissive set for deps.
+# Bouncer ships under MIT OR Apache-2.0; allow the usual permissive set for deps,
+# plus two unambiguously-permissive licenses pulled in transitively by the UI tree.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -22,8 +29,21 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    "BSL-1.0", # Boost license — permissive (clipboard-win, error-code, via arboard)
+    "CC0-1.0", # public-domain dedication (hexf-parse, via tiny-skia)
 ]
 confidence-threshold = 0.8
+
+# Notable licenses (weak file-level copyleft, bundled-font terms) allowed only for
+# the specific transitive crates that carry them — none affect how Bouncer itself
+# is licensed or distributed.
+[[licenses.exceptions]]
+name = "option-ext" # MPL-2.0; pulled in by `directories`
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "epaint_default_fonts" # egui's bundled Ubuntu + emoji fonts
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 
 [sources]
 unknown-registry = "deny"
