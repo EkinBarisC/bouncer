@@ -3,7 +3,7 @@
 //! Pure: fed every input event, it tracks which keys are currently held and emits
 //! an **edge-triggered** toggle when the configured chord becomes fully held. It
 //! also reports whether the event should be **consumed** (not leaked to the
-//! foreground app). See DESIGN.md §6 and CONTEXT.md ("panic hotkey").
+//! foreground app). See DESIGN.md §6 and UBIQUITOUS_LANGUAGE.md ("panic hotkey").
 
 use std::collections::{BTreeSet, HashSet};
 

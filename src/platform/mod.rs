@@ -9,8 +9,8 @@ use crate::core::Engine;
 use crate::messages::{Command, Report};
 use std::sync::mpsc::{Receiver, Sender};
 
-/// Errors a backend can surface to the supervisor. A real error type replaces this
-/// placeholder when the Windows backend lands (#7).
+/// Errors a backend can surface to the supervisor. A plain string for now — there is
+/// one backend and failures are terminal, so a structured type would buy nothing yet.
 pub type BackendError = String;
 
 /// An OS input-hook backend. One implementation per platform; only `windows` for v1.

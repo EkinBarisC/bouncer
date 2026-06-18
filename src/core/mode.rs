@@ -2,7 +2,7 @@
 //!
 //! `Paused` is persisted across reboots; `Panic` is never persisted (Bouncer
 //! always boots out of Panic). The orthogonal diagnostic overlay lives elsewhere
-//! (it is meaningful only while `Active`). See `CONTEXT.md`.
+//! (it is meaningful only while `Active`). See `UBIQUITOUS_LANGUAGE.md`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
