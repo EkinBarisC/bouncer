@@ -1,0 +1,6 @@
+# Statically link the MSVC C runtime so the release binary is a single,
+# truly self-contained portable .exe with no external runtime dependency
+# (otherwise it imports VCRUNTIME140.dll, which is absent on a clean Windows
+# install until the VC++ Redistributable is present). See issue #13.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
