@@ -106,11 +106,9 @@ platform/UI shell. New behavior is built test-first.
 
 Core engine, Windows keyboard + mouse backends, tray, settings window, diagnostics, and the
 hardening layer (panic hotkey, fail-open, eviction watchdog, single-instance) are implemented.
-Remaining before a tagged release: packaging a portable `.exe`, GitHub Releases with SHA256
-checksums, and adding the license files. See [DESIGN.md](DESIGN.md) §12 for the milestone map.
+Remaining before a tagged release: packaging a portable `.exe` and GitHub Releases with SHA256
+checksums. See [DESIGN.md](DESIGN.md) §12 for the milestone map.
 
 ## License
 
-Dual-licensed under either of [MIT](https://opensource.org/licenses/MIT) or
-[Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) at your option. (`LICENSE-MIT` and
-`LICENSE-APACHE` files land with the first tagged release.)
+Licensed under the [MIT License](LICENSE-MIT).

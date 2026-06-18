@@ -18,8 +18,9 @@ wildcards = "deny"
 
 [licenses]
 version = 2
-# Bouncer ships under MIT OR Apache-2.0; allow the usual permissive set for deps,
-# plus two unambiguously-permissive licenses pulled in transitively by the UI tree.
+# Bouncer ships under MIT; allow the usual permissive set for deps (which carry a
+# mix of MIT/Apache/BSD/etc.), plus a few permissive licenses pulled in transitively
+# by the UI tree.
 allow = [
     "MIT",
     "Apache-2.0",
