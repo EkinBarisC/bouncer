@@ -3,7 +3,7 @@
 //! Pure: given an event (carrying its own timestamp) and the active thresholds,
 //! decide whether it is chatter. State is the previous release time per `KeyId`
 //! (plus which keys are mid-suppressed-press, so a suppressed down's paired up is
-//! also discarded). See DESIGN.md §5 and CONTEXT.md ("release-anchored").
+//! also discarded). See DESIGN.md §5 and UBIQUITOUS_LANGUAGE.md ("release-anchored").
 
 use std::collections::{HashMap, HashSet};
 

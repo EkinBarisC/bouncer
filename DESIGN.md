@@ -7,7 +7,7 @@
 > The name is a double meaning: a club *bouncer* rejects unwanted entries at the door, and
 > the app *de-bounces* the input stream.
 
-**Status:** design locked, implementation not started.
+**Status:** core + Windows backends + tray/settings/diagnostics/hardening implemented; packaging and release pending (see §12).
 **Platform:** Windows-only for v1 (cross-platform architecture in place, other OSes deferred).
 **Language:** Rust. **UI:** egui/eframe. **License/source:** open source.
 
@@ -153,7 +153,7 @@ bouncer/
 ├── Cargo.toml
 ├── DESIGN.md                 ← this file
 ├── README.md
-├── CONTEXT.md                ← glossary (canonical domain terms)
+├── UBIQUITOUS_LANGUAGE.md    ← glossary (canonical domain terms)
 ├── docs/adr/                 ← architecture decision records
 ├── .github/workflows/ci.yml  ← fmt --check, clippy -D warnings, tests
 ├── deny.toml                 ← cargo-deny config
@@ -359,5 +359,5 @@ Vertical-slice ordering. The hook is the riskiest unknown, so a throwaway spike 
 | **M9** | Packaging | Portable release `.exe`, GitHub Release + SHA256, README finalize, pick a license. |
 
 > All design soft areas from the initial grilling are now resolved (state model, core/shell
-> boundary [ADR-0001], panic hotkey, tray surface, settings layout, roadmap). See `CONTEXT.md`
+> boundary [ADR-0001], panic hotkey, tray surface, settings layout, roadmap). See `UBIQUITOUS_LANGUAGE.md`
 > for the glossary and `docs/adr/` for recorded decisions.
