@@ -42,6 +42,11 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+[target."cfg(windows)".build-dependencies]
+# Embeds assets/icon.ico into the exe so Explorer / taskbar / title bar show the
+# app icon (see build.rs).
+winresource = "0.1"
+
 [target."cfg(windows)".dependencies]
 # The tray + egui UI is Windows-only for v1 (the app is gated behind cfg(windows)),
 # so its heavy GUI deps live here rather than in the cross-platform set.

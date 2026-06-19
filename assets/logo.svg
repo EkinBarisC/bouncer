@@ -1,0 +1,5 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bouncer logo">
+  <rect width="256" height="256" rx="56" fill="#00A082"/>
+  <path d="M128 45 L182 64 L182 125 Q182 182 128 211 Q74 182 74 125 L74 64 Z" fill="#FFFFFF"/>
+  <polyline points="93,147 112,147 112,106 128,106 128,147 144,147 144,118 166,118" fill="none" stroke="#00A082" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -37,10 +37,14 @@ pub fn run(
     reports: Receiver<Report>,
     show_requested: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([420.0, 520.0])
+        .with_visible(false); // tray-resident: start hidden
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([420.0, 520.0])
-            .with_visible(false), // tray-resident: start hidden
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

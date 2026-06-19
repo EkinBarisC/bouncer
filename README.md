@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Bouncer logo" width="112" height="112">
+</p>
+
 # Bouncer
 
 A headless, tray-resident **input debouncer** for Windows. It suppresses keyboard *and* mouse
@@ -8,6 +12,10 @@ mouse double-click bug) — while never touching your legitimate input.
 > app *de-bounces* your input stream.
 
 **no admin · no driver · no network · suppressed-events-only · open source**
+
+<p align="center">
+  <img src="assets/screenshot.png" alt="Bouncer settings window" width="520">
+</p>
 
 ## Why
 

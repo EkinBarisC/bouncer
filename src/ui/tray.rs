@@ -162,33 +162,133 @@ impl TrayModel {
 /// The side length, in pixels, of the generated tray icon.
 pub const ICON_SIZE: u32 = 32;
 
-/// Generate the raw RGBA pixels for an icon state — a flat colour fill (teal =
-/// Active, grey = Paused, red = Panic) with a small red "recording" dot in the
-/// corner for the diagnostic badge. Returned as `ICON_SIZE × ICON_SIZE` RGBA8 for
-/// `tray_icon::Icon::from_rgba`. Pure, so the colour mapping is unit-testable; the
-/// art is deliberately minimal (refine later).
+/// Generate the raw RGBA pixels for an icon state: the Bouncer shield silhouette
+/// filled in the state colour (teal = Active, grey = Paused, red = Panic) with a
+/// white pulse, on a transparent background, plus a red "recording" dot in the
+/// corner for the diagnostic badge. `ICON_SIZE × ICON_SIZE` RGBA8 for
+/// `tray_icon::Icon::from_rgba`. Pure and super-sampled; the shape matches
+/// `assets/logo.svg`, so the colour mapping stays unit-testable.
 pub fn icon_rgba(state: IconState) -> Vec<u8> {
-    let (r, g, b) = match state {
-        IconState::Active | IconState::ActiveDiagnostic => (0x00, 0xA0, 0x82),
+    let (sr, sg, sb) = match state {
+        IconState::Active | IconState::ActiveDiagnostic => (0x00u32, 0xA0, 0x82),
         IconState::Paused => (0x80, 0x80, 0x80),
         IconState::Panic => (0xD2, 0x28, 0x28),
     };
-    let size = ICON_SIZE as i32;
+
+    // Fit the shield (logo design space: bbox centred on 128,128, height 166) into
+    // the icon with a ~1 px margin, super-sampling each pixel for smooth edges.
+    let shield = shield_polygon();
+    let scale = ICON_SIZE as f32 * 30.0 / 32.0 / 166.0;
+    let to_design = |c: f32| 128.0 + (c - ICON_SIZE as f32 / 2.0) / scale;
+
+    const SS: u32 = 4;
     let mut buf = Vec::with_capacity((ICON_SIZE * ICON_SIZE * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let mut px = [r, g, b, 0xFF];
-            if state == IconState::ActiveDiagnostic {
-                // A filled circle (radius 5) centred near the top-right corner.
-                let (dx, dy) = (x - (size - 8), y - 8);
-                if dx * dx + dy * dy <= 25 {
-                    px = [0xE6, 0x1E, 0x1E, 0xFF];
+    for y in 0..ICON_SIZE {
+        for x in 0..ICON_SIZE {
+            let (mut ar, mut ag, mut ab, mut cov) = (0u32, 0u32, 0u32, 0u32);
+            for sy in 0..SS {
+                for sx in 0..SS {
+                    let cx = x as f32 + (sx as f32 + 0.5) / SS as f32;
+                    let cy = y as f32 + (sy as f32 + 0.5) / SS as f32;
+                    // Diagnostic badge: a filled dot near the top-right corner.
+                    if state == IconState::ActiveDiagnostic
+                        && (cx - 24.0).powi(2) + (cy - 8.0).powi(2) <= 25.0
+                    {
+                        ar += 0xE6;
+                        ag += 0x1E;
+                        ab += 0x1E;
+                        cov += 1;
+                        continue;
+                    }
+                    let (px, py) = (to_design(cx), to_design(cy));
+                    if point_in_polygon(px, py, &shield) {
+                        if dist_to_polyline(px, py, PULSE) <= 5.0 {
+                            ar += 0xFF;
+                            ag += 0xFF;
+                            ab += 0xFF;
+                        } else {
+                            ar += sr;
+                            ag += sg;
+                            ab += sb;
+                        }
+                        cov += 1;
+                    }
                 }
             }
-            buf.extend_from_slice(&px);
+            let total = SS * SS;
+            let avg = |sum: u32| sum.checked_div(cov).unwrap_or(0) as u8;
+            buf.extend_from_slice(&[avg(ar), avg(ag), avg(ab), (255 * cov / total) as u8]);
         }
     }
     buf
+}
+
+/// The white square-wave pulse inside the shield, in the logo's 256-unit space.
+const PULSE: &[(f32, f32)] = &[
+    (93.0, 147.0),
+    (112.0, 147.0),
+    (112.0, 106.0),
+    (128.0, 106.0),
+    (128.0, 147.0),
+    (144.0, 147.0),
+    (144.0, 118.0),
+    (166.0, 118.0),
+];
+
+/// The shield outline as a polygon, sampling the logo path's two quadratic curves.
+fn shield_polygon() -> Vec<(f32, f32)> {
+    let mut p = vec![(128.0, 45.0), (182.0, 64.0), (182.0, 125.0)];
+    push_quad(&mut p, (182.0, 125.0), (182.0, 182.0), (128.0, 211.0));
+    push_quad(&mut p, (128.0, 211.0), (74.0, 182.0), (74.0, 125.0));
+    p.push((74.0, 64.0));
+    p
+}
+
+fn push_quad(out: &mut Vec<(f32, f32)>, p0: (f32, f32), c: (f32, f32), p1: (f32, f32)) {
+    const STEPS: u32 = 16;
+    for i in 1..=STEPS {
+        let t = i as f32 / STEPS as f32;
+        let u = 1.0 - t;
+        out.push((
+            u * u * p0.0 + 2.0 * u * t * c.0 + t * t * p1.0,
+            u * u * p0.1 + 2.0 * u * t * c.1 + t * t * p1.1,
+        ));
+    }
+}
+
+/// Even-odd ray-cast point-in-polygon (the polygon is implicitly closed).
+fn point_in_polygon(x: f32, y: f32, poly: &[(f32, f32)]) -> bool {
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for (i, &(xi, yi)) in poly.iter().enumerate() {
+        let (xj, yj) = poly[j];
+        if (yi > y) != (yj > y) {
+            let xint = xi + (y - yi) / (yj - yi) * (xj - xi);
+            if x < xint {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+fn dist_to_polyline(x: f32, y: f32, pts: &[(f32, f32)]) -> f32 {
+    pts.windows(2)
+        .map(|w| dist_to_segment(x, y, w[0], w[1]))
+        .fold(f32::MAX, f32::min)
+}
+
+fn dist_to_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 {
+        0.0
+    } else {
+        (((px - a.0) * dx + (py - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (a.0 + t * dx, a.1 + t * dy);
+    ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
 }
 
 /// Resolve the quit-confirmation dialog. Confirming with "Don't ask again" ticked
@@ -416,9 +516,9 @@ mod tests {
         ] {
             assert_eq!(icon_rgba(s).len(), n, "{s:?} is ICON_SIZE² RGBA8");
         }
-        // A center pixel differs across the base states.
-        let mid = ((ICON_SIZE * ICON_SIZE / 2 + ICON_SIZE / 2) * 4) as usize;
-        let rgb = |s| icon_rgba(s)[mid..mid + 3].to_vec();
+        // A pixel on the lower shield body (below the pulse) carries the state colour.
+        let body = ((24 * ICON_SIZE + ICON_SIZE / 2) * 4) as usize;
+        let rgb = |s| icon_rgba(s)[body..body + 3].to_vec();
         assert_ne!(rgb(IconState::Active), rgb(IconState::Paused));
         assert_ne!(rgb(IconState::Active), rgb(IconState::Panic));
         assert_ne!(rgb(IconState::Paused), rgb(IconState::Panic));
