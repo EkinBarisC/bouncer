@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Bouncer logo" width="112" height="112">
+  <img src="https://raw.githubusercontent.com/EkinBarisC/bouncer/main/assets/icon.png" alt="Bouncer logo" width="112" height="112">
 </p>
 
 # Bouncer
@@ -14,7 +14,7 @@ mouse double-click bug) — while never touching your legitimate input.
 **no admin · no driver · no network · suppressed-events-only · open source**
 
 <p align="center">
-  <img src="assets/screenshot.png" alt="Bouncer settings window" width="520">
+  <img src="https://raw.githubusercontent.com/EkinBarisC/bouncer/main/assets/screenshot.png" alt="Bouncer settings window" width="520">
 </p>
 
 ## Why
