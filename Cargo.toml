@@ -1,15 +1,19 @@
+# Crate name is `input-bouncer` because `bouncer` is taken on crates.io; the
+# binary is still named `bouncer` (see [[bin]]), so `cargo install input-bouncer`
+# yields a `bouncer` executable.
 [package]
-name = "bouncer"
+name = "input-bouncer"
 version = "1.0.1"
 edition = "2021"
 rust-version = "1.92"
 description = "Headless input debouncer for Windows — suppresses keyboard & mouse chatter"
 license = "MIT"
 repository = "https://github.com/EkinBarisC/bouncer"
-publish = false
+keywords = ["debounce", "keyboard", "mouse", "chatter", "windows"]
 
 # Library + thin binary: the library holds all logic so unit and integration
-# tests exercise the real public API (see ADR-0001 and DESIGN.md §9).
+# tests exercise the real public API (see ADR-0001 and DESIGN.md §9). The lib is
+# named `bouncer` so test/integration imports stay `use bouncer::…`.
 [lib]
 name = "bouncer"
 path = "src/lib.rs"

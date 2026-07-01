@@ -513,21 +513,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bouncer"
-version = "1.0.1"
-dependencies = [
- "directories",
- "eframe",
- "proptest",
- "serde",
- "toml 0.8.2",
- "tray-icon",
- "windows",
- "winreg",
- "winresource",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1908,6 +1893,21 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "input-bouncer"
+version = "1.0.1"
+dependencies = [
+ "directories",
+ "eframe",
+ "proptest",
+ "serde",
+ "toml 0.8.2",
+ "tray-icon",
+ "windows",
+ "winreg",
+ "winresource",
 ]
 
 [[package]]
