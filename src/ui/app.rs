@@ -490,7 +490,7 @@ impl BouncerApp {
         let tx = rect.left() + (threshold / span).clamp(0.0, 1.0) * rect.width();
         painter.line_segment(
             [egui::pos2(tx, rect.top()), egui::pos2(tx, rect.bottom())],
-            egui::Stroke::new(1.5, egui::Color32::from_rgb(0xD2, 0x28, 0x28)),
+            egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(0xD2, 0x28, 0x28)),
         );
         painter.text(
             egui::pos2(tx + 3.0, rect.top()),
