@@ -103,7 +103,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::event::{Device, EventKind, InputEvent};
+    use crate::core::event::{Device, EventKind, InputEvent, KeyCode};
     use crate::core::mode::Mode;
     use crate::core::test_util::{down, up, A, ALT, CTRL, F12, SHIFT};
     use crate::core::verdict::Verdict;
@@ -246,11 +246,25 @@ mod tests {
 
     // --- Fail-open property tests (the safety invariant) ---
 
+    /// A fully arbitrary `KeyCode`, spanning every variant (so a chord may form).
+    fn arb_keycode() -> impl Strategy<Value = KeyCode> {
+        prop_oneof![
+            Just(KeyCode::Shift),
+            Just(KeyCode::Control),
+            Just(KeyCode::Alt),
+            Just(KeyCode::Meta),
+            (1u8..=12).prop_map(KeyCode::Function),
+            (0x41u32..=0x5A).prop_map(|n| KeyCode::Letter(n as u8 as char)),
+            (0u8..=9).prop_map(KeyCode::Digit),
+            any::<u32>().prop_map(KeyCode::Other),
+        ]
+    }
+
     /// A fully arbitrary event, including modifier keys (so the chord may form).
     fn arb_any_event() -> impl Strategy<Value = InputEvent> {
         (
             prop_oneof![Just(Device::Keyboard), Just(Device::Mouse)],
-            any::<u32>(),
+            arb_keycode(),
             prop_oneof![Just(EventKind::Down), Just(EventKind::Up)],
             any::<u64>(),
             any::<bool>(),
@@ -269,7 +283,7 @@ mod tests {
     fn arb_nonchord_event() -> impl Strategy<Value = InputEvent> {
         (
             prop_oneof![Just(Device::Keyboard), Just(Device::Mouse)],
-            0x41u32..=0x5A,
+            (0x41u32..=0x5A).prop_map(|n| KeyCode::Letter(n as u8 as char)),
             prop_oneof![Just(EventKind::Down), Just(EventKind::Up)],
             any::<u64>(),
             any::<bool>(),

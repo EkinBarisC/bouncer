@@ -142,8 +142,9 @@ impl Stats {
 mod tests {
     use super::*;
 
-    const A: KeyId = 0x41;
-    const LMB: KeyId = 0x01;
+    use crate::core::{KeyCode, MouseButton};
+    const A: KeyId = KeyCode::Letter('A');
+    const LMB: KeyId = KeyCode::Mouse(MouseButton::Left);
 
     fn suppressed(device: Device, key: KeyId, gap_ms: u64) -> Report {
         Report::Suppressed {

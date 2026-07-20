@@ -1,4 +1,4 @@
-//! Human-readable panic-hotkey strings ↔ virtual-key codes.
+//! Human-readable panic-hotkey strings ↔ [`KeyCode`]s.
 //!
 //! [`display`] renders a captured chord as `Ctrl+Alt+Shift+F12`; [`parse`] turns a
 //! config string back into a validated [`PanicChord`]. Pure and unit-tested. This is
@@ -6,6 +6,7 @@
 //! once at load and serializes the chord back through [`display`], so the rest of the
 //! app works with the typed chord, never a raw string.
 
+use crate::core::event::KeyCode;
 use crate::core::{ChordError, KeyId, PanicChord};
 
 /// Why a hotkey string could not be parsed.
@@ -36,8 +37,8 @@ pub fn display(keys: &[KeyId]) -> String {
 pub fn parse(s: &str) -> Result<PanicChord, HotkeyError> {
     let mut keys = Vec::new();
     for token in s.split('+').map(str::trim).filter(|t| !t.is_empty()) {
-        match token_to_vk(token) {
-            Some(vk) => keys.push(vk),
+        match token_to_keycode(token) {
+            Some(key) => keys.push(key),
             None => return Err(HotkeyError::UnknownToken(token.to_string())),
         }
     }
@@ -48,43 +49,44 @@ pub fn parse(s: &str) -> Result<PanicChord, HotkeyError> {
 }
 
 /// Sort key: modifiers (Ctrl, Alt, Shift, Win) come before ordinary keys.
-fn modifier_rank(vk: KeyId) -> u8 {
-    match vk {
-        0x11 | 0xA2 | 0xA3 => 0, // Ctrl
-        0x12 | 0xA4 | 0xA5 => 1, // Alt
-        0x10 | 0xA0 | 0xA1 => 2, // Shift
-        0x5B | 0x5C => 3,        // Win
+fn modifier_rank(key: KeyId) -> u8 {
+    match key {
+        KeyCode::Control => 0,
+        KeyCode::Alt => 1,
+        KeyCode::Shift => 2,
+        KeyCode::Meta => 3,
         _ => 4,
     }
 }
 
-/// A display name for one virtual-key code.
-fn key_name(vk: KeyId) -> String {
-    match vk {
-        0x10 | 0xA0 | 0xA1 => "Shift".to_string(),
-        0x11 | 0xA2 | 0xA3 => "Ctrl".to_string(),
-        0x12 | 0xA4 | 0xA5 => "Alt".to_string(),
-        0x5B | 0x5C => "Win".to_string(),
-        0x30..=0x39 => ((b'0' + (vk - 0x30) as u8) as char).to_string(),
-        0x41..=0x5A => ((b'A' + (vk - 0x41) as u8) as char).to_string(),
-        0x70..=0x7B => format!("F{}", vk - 0x6F),
-        other => format!("0x{other:02X}"),
+/// A display name for one [`KeyCode`].
+fn key_name(key: KeyId) -> String {
+    match key {
+        KeyCode::Shift => "Shift".to_string(),
+        KeyCode::Control => "Ctrl".to_string(),
+        KeyCode::Alt => "Alt".to_string(),
+        KeyCode::Meta => "Win".to_string(),
+        KeyCode::Function(n) => format!("F{n}"),
+        KeyCode::Letter(c) => c.to_string(),
+        KeyCode::Digit(d) => d.to_string(),
+        KeyCode::Mouse(b) => format!("{b:?}"),
+        KeyCode::Other(code) => format!("0x{code:02X}"),
     }
 }
 
-/// Map one parsed token (case-insensitive) to a virtual-key code.
-fn token_to_vk(token: &str) -> Option<KeyId> {
+/// Map one parsed token (case-insensitive) to a [`KeyCode`].
+fn token_to_keycode(token: &str) -> Option<KeyId> {
     let t = token.to_ascii_lowercase();
-    let vk = match t.as_str() {
-        "ctrl" | "control" => 0x11,
-        "alt" => 0x12,
-        "shift" => 0x10,
-        "win" | "super" | "meta" | "cmd" => 0x5B,
+    let key = match t.as_str() {
+        "ctrl" | "control" => KeyCode::Control,
+        "alt" => KeyCode::Alt,
+        "shift" => KeyCode::Shift,
+        "win" | "super" | "meta" | "cmd" => KeyCode::Meta,
         // F1..=F12
         _ if t.starts_with('f') && t.len() >= 2 => {
             let n: u8 = t[1..].parse().ok()?;
             if (1..=12).contains(&n) {
-                0x6F + n as u32
+                KeyCode::Function(n)
             } else {
                 return None;
             }
@@ -93,25 +95,25 @@ fn token_to_vk(token: &str) -> Option<KeyId> {
         _ if t.len() == 1 => {
             let c = t.chars().next()?;
             match c {
-                'a'..='z' => 0x41 + (c as u32 - 'a' as u32),
-                '0'..='9' => 0x30 + (c as u32 - '0' as u32),
+                'a'..='z' => KeyCode::Letter(c.to_ascii_uppercase()),
+                '0'..='9' => KeyCode::Digit(c as u8 - b'0'),
                 _ => return None,
             }
         }
         _ => return None,
     };
-    Some(vk)
+    Some(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SHIFT: KeyId = 0x10;
-    const CTRL: KeyId = 0x11;
-    const ALT: KeyId = 0x12;
-    const F12: KeyId = 0x7B;
-    const A: KeyId = 0x41;
+    const SHIFT: KeyId = KeyCode::Shift;
+    const CTRL: KeyId = KeyCode::Control;
+    const ALT: KeyId = KeyCode::Alt;
+    const F12: KeyId = KeyCode::Function(12);
+    const A: KeyId = KeyCode::Letter('A');
 
     #[test]
     fn parses_the_default_chord() {

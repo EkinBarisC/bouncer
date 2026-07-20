@@ -19,7 +19,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::config::Config;
 use crate::core::event::EventKind;
 use crate::core::hotkey;
-use crate::core::{KeyId, Mode};
+use crate::core::{KeyCode, KeyId, Mode};
 use crate::messages::{Command, Report};
 use crate::platform::windows::post_wake;
 use crate::stats::{Stats, HISTOGRAM_BUCKETS, HISTOGRAM_BUCKET_MS};
@@ -354,19 +354,19 @@ impl BouncerApp {
                     ..
                 } = event
                 {
-                    if let Some(vk) = key_to_vk(*key) {
+                    if let Some(code) = key_to_keycode(*key) {
                         // Rebuild the candidate from the modifiers held + this key.
                         let mut cap = RebindCapture::new();
                         if modifiers.ctrl || modifiers.command {
-                            cap.on_event(0x11, EventKind::Down);
+                            cap.on_event(KeyCode::Control, EventKind::Down);
                         }
                         if modifiers.alt {
-                            cap.on_event(0x12, EventKind::Down);
+                            cap.on_event(KeyCode::Alt, EventKind::Down);
                         }
                         if modifiers.shift {
-                            cap.on_event(0x10, EventKind::Down);
+                            cap.on_event(KeyCode::Shift, EventKind::Down);
                         }
-                        cap.on_event(vk, EventKind::Down);
+                        cap.on_event(code, EventKind::Down);
                         self.rebind_candidate = cap;
                     }
                 }
@@ -635,60 +635,60 @@ fn make_icon(state: IconState) -> Result<Icon, String> {
     Icon::from_rgba(icon_rgba(state), ICON_SIZE, ICON_SIZE).map_err(|e| e.to_string())
 }
 
-/// Map an egui key to its Windows virtual-key code, for the rebind capture. Covers
+/// Map an egui key to a platform-neutral [`KeyCode`], for the rebind capture. Covers
 /// the keys a panic chord realistically uses (letters, digits, function keys).
-fn key_to_vk(key: egui::Key) -> Option<KeyId> {
+fn key_to_keycode(key: egui::Key) -> Option<KeyId> {
     use egui::Key::*;
-    let vk = match key {
-        A => 0x41,
-        B => 0x42,
-        C => 0x43,
-        D => 0x44,
-        E => 0x45,
-        F => 0x46,
-        G => 0x47,
-        H => 0x48,
-        I => 0x49,
-        J => 0x4A,
-        K => 0x4B,
-        L => 0x4C,
-        M => 0x4D,
-        N => 0x4E,
-        O => 0x4F,
-        P => 0x50,
-        Q => 0x51,
-        R => 0x52,
-        S => 0x53,
-        T => 0x54,
-        U => 0x55,
-        V => 0x56,
-        W => 0x57,
-        X => 0x58,
-        Y => 0x59,
-        Z => 0x5A,
-        Num0 => 0x30,
-        Num1 => 0x31,
-        Num2 => 0x32,
-        Num3 => 0x33,
-        Num4 => 0x34,
-        Num5 => 0x35,
-        Num6 => 0x36,
-        Num7 => 0x37,
-        Num8 => 0x38,
-        Num9 => 0x39,
-        F1 => 0x70,
-        F2 => 0x71,
-        F3 => 0x72,
-        F4 => 0x73,
-        F5 => 0x74,
-        F6 => 0x75,
-        F7 => 0x76,
-        F8 => 0x77,
-        F9 => 0x78,
-        F10 => 0x79,
-        F11 => 0x7A,
-        F12 => 0x7B,
+    let code = match key {
+        A => KeyCode::Letter('A'),
+        B => KeyCode::Letter('B'),
+        C => KeyCode::Letter('C'),
+        D => KeyCode::Letter('D'),
+        E => KeyCode::Letter('E'),
+        F => KeyCode::Letter('F'),
+        G => KeyCode::Letter('G'),
+        H => KeyCode::Letter('H'),
+        I => KeyCode::Letter('I'),
+        J => KeyCode::Letter('J'),
+        K => KeyCode::Letter('K'),
+        L => KeyCode::Letter('L'),
+        M => KeyCode::Letter('M'),
+        N => KeyCode::Letter('N'),
+        O => KeyCode::Letter('O'),
+        P => KeyCode::Letter('P'),
+        Q => KeyCode::Letter('Q'),
+        R => KeyCode::Letter('R'),
+        S => KeyCode::Letter('S'),
+        T => KeyCode::Letter('T'),
+        U => KeyCode::Letter('U'),
+        V => KeyCode::Letter('V'),
+        W => KeyCode::Letter('W'),
+        X => KeyCode::Letter('X'),
+        Y => KeyCode::Letter('Y'),
+        Z => KeyCode::Letter('Z'),
+        Num0 => KeyCode::Digit(0),
+        Num1 => KeyCode::Digit(1),
+        Num2 => KeyCode::Digit(2),
+        Num3 => KeyCode::Digit(3),
+        Num4 => KeyCode::Digit(4),
+        Num5 => KeyCode::Digit(5),
+        Num6 => KeyCode::Digit(6),
+        Num7 => KeyCode::Digit(7),
+        Num8 => KeyCode::Digit(8),
+        Num9 => KeyCode::Digit(9),
+        F1 => KeyCode::Function(1),
+        F2 => KeyCode::Function(2),
+        F3 => KeyCode::Function(3),
+        F4 => KeyCode::Function(4),
+        F5 => KeyCode::Function(5),
+        F6 => KeyCode::Function(6),
+        F7 => KeyCode::Function(7),
+        F8 => KeyCode::Function(8),
+        F9 => KeyCode::Function(9),
+        F10 => KeyCode::Function(10),
+        F11 => KeyCode::Function(11),
+        F12 => KeyCode::Function(12),
         _ => return None,
     };
-    Some(vk)
+    Some(code)
 }

@@ -5,16 +5,16 @@
 //! modules focused on behavior, not boilerplate.
 
 use crate::core::debouncer::Thresholds;
-use crate::core::event::{Device, EventKind, InputEvent, KeyId};
+use crate::core::event::{Device, EventKind, InputEvent, KeyCode, KeyId, MouseButton};
 
-// Virtual-key codes used across the core tests.
-pub(crate) const A: KeyId = 0x41; // 'A'
-pub(crate) const B: KeyId = 0x42; // 'B'
-pub(crate) const CTRL: KeyId = 0x11;
-pub(crate) const ALT: KeyId = 0x12;
-pub(crate) const SHIFT: KeyId = 0x10;
-pub(crate) const F12: KeyId = 0x7B;
-pub(crate) const LMB: KeyId = 0x01; // a mouse button id
+// KeyCodes used across the core tests.
+pub(crate) const A: KeyId = KeyCode::Letter('A');
+pub(crate) const B: KeyId = KeyCode::Letter('B');
+pub(crate) const CTRL: KeyId = KeyCode::Control;
+pub(crate) const ALT: KeyId = KeyCode::Alt;
+pub(crate) const SHIFT: KeyId = KeyCode::Shift;
+pub(crate) const F12: KeyId = KeyCode::Function(12);
+pub(crate) const LMB: KeyId = KeyCode::Mouse(MouseButton::Left);
 
 /// Default thresholds: keyboard 30 ms, mouse 40 ms (matches `Config::default`).
 pub(crate) const THR: Thresholds = Thresholds {

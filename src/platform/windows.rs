@@ -8,7 +8,7 @@
 //! mouse timing in the same place.
 
 use crate::core::Engine;
-use crate::core::{Device, EventKind, InputEvent, Verdict};
+use crate::core::{Device, EventKind, InputEvent, KeyCode, KeyId, MouseButton, Verdict};
 use crate::messages::{Command, Report};
 use crate::platform::watchdog::{Health, Watchdog, WatchdogAction};
 use crate::platform::{BackendError, HookBackend};
@@ -91,9 +91,38 @@ thread_local! {
     static WATCHDOG_PRIMED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Translate a Windows keyboard virtual-key code into the platform-neutral
+/// [`KeyCode`]. Named variants for chord-relevant keys (modifiers with L/R folded,
+/// letters, digits, F1..F12); every other key keeps a stable opaque identity via
+/// [`KeyCode::Other`], which the debouncer needs but no chord names.
+fn vk_to_keycode(vk: u32) -> KeyId {
+    match vk {
+        0x10 | 0xA0 | 0xA1 => KeyCode::Shift,
+        0x11 | 0xA2 | 0xA3 => KeyCode::Control,
+        0x12 | 0xA4 | 0xA5 => KeyCode::Alt,
+        0x5B | 0x5C => KeyCode::Meta,
+        0x30..=0x39 => KeyCode::Digit((vk - 0x30) as u8),
+        0x41..=0x5A => KeyCode::Letter((b'A' + (vk - 0x41) as u8) as char),
+        0x70..=0x7B => KeyCode::Function((vk - 0x6F) as u8),
+        other => KeyCode::Other(other),
+    }
+}
+
+/// Translate a mouse-button id (the `MOUSE_*` constants) into a [`KeyCode`].
+fn mouse_keycode(button: u32) -> KeyId {
+    match button {
+        MOUSE_LEFT => KeyCode::Mouse(MouseButton::Left),
+        MOUSE_RIGHT => KeyCode::Mouse(MouseButton::Right),
+        MOUSE_MIDDLE => KeyCode::Mouse(MouseButton::Middle),
+        MOUSE_X1 => KeyCode::Mouse(MouseButton::X1),
+        MOUSE_X2 => KeyCode::Mouse(MouseButton::X2),
+        other => KeyCode::Other(other),
+    }
+}
+
 /// Run one event through the Engine and return its verdict. Shared by both hook
 /// callbacks; allocation-free except an off-path `Report` on a mode change.
-fn decide(device: Device, key: u32, kind: EventKind, injected: bool, time_ms: u64) -> Verdict {
+fn decide(device: Device, key: KeyId, kind: EventKind, injected: bool, time_ms: u64) -> Verdict {
     HOOK_STATE.with(|cell| {
         let mut guard = cell.borrow_mut();
         let Some(state) = guard.as_mut() else {
@@ -148,7 +177,7 @@ unsafe extern "system" fn keyboard_hook_proc(code: i32, wparam: WPARAM, lparam: 
     let injected = info.flags.0 & LLKHF_INJECTED.0 != 0;
     match decide(
         Device::Keyboard,
-        info.vkCode,
+        vk_to_keycode(info.vkCode),
         kind,
         injected,
         info.time as u64,
@@ -170,7 +199,13 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     };
     let injected = info.flags & LLMHF_INJECTED != 0;
-    match decide(Device::Mouse, button, kind, injected, info.time as u64) {
+    match decide(
+        Device::Mouse,
+        mouse_keycode(button),
+        kind,
+        injected,
+        info.time as u64,
+    ) {
         Verdict::Suppress => LRESULT(1),
         Verdict::Pass => unsafe { CallNextHookEx(None, code, wparam, lparam) },
     }
@@ -453,7 +488,7 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
-    const A: u32 = 0x41;
+    const A: KeyId = KeyCode::Letter('A');
 
     /// Feed `decide` directly (it's pure given the thread-local state): a chatter
     /// re-press must emit `Report::Suppressed` so the UI counters tick (#27).

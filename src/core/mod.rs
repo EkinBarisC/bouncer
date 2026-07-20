@@ -16,7 +16,7 @@ pub(crate) mod test_util;
 
 pub use debouncer::{Debouncer, Thresholds};
 pub use engine::Engine;
-pub use event::{Device, EventKind, InputEvent, KeyId};
+pub use event::{Device, EventKind, InputEvent, KeyCode, KeyId, MouseButton};
 pub use mode::Mode;
 pub use panic::{ChordError, PanicChord, PanicDetector, PanicReaction};
 pub use verdict::{Outcome, Verdict};

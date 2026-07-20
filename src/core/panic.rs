@@ -7,14 +7,15 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::core::event::{InputEvent, KeyId};
+use crate::core::event::{InputEvent, KeyCode, KeyId};
 
-/// True for Ctrl/Alt/Shift/Win virtual-key codes.
-///
-/// `0x10..=0x12` are generic Shift/Control/Alt; `0xA0..=0xA5` their left/right
-/// variants; `0x5B`/`0x5C` are left/right Win.
+/// True for the Ctrl/Alt/Shift/Meta modifier keys. Left/right variants already fold
+/// to one logical modifier in [`KeyCode`], so this is a plain variant match.
 fn is_modifier(key: KeyId) -> bool {
-    matches!(key, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5)
+    matches!(
+        key,
+        KeyCode::Shift | KeyCode::Control | KeyCode::Alt | KeyCode::Meta
+    )
 }
 
 /// Why a proposed chord is invalid.
@@ -49,10 +50,15 @@ impl PanicChord {
     }
 
     /// The default chord: Ctrl+Alt+Shift+F12 (universal keys; no Pause/ScrollLock
-    /// that some keyboards lack). L/R modifier vk resolution is handled at wiring (#9).
+    /// that some keyboards lack).
     pub fn default_chord() -> Self {
-        // 0x11 Ctrl, 0x12 Alt, 0x10 Shift, 0x7B F12.
-        Self::new(&[0x11, 0x12, 0x10, 0x7B]).expect("default chord is valid")
+        Self::new(&[
+            KeyCode::Control,
+            KeyCode::Alt,
+            KeyCode::Shift,
+            KeyCode::Function(12),
+        ])
+        .expect("default chord is valid")
     }
 
     /// The chord's keys, ascending — for display and round-tripping through config.
