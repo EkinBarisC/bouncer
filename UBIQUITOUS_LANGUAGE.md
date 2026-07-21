@@ -56,7 +56,9 @@ Use these terms exactly — in code, commits, UI copy, and conversation.
 | **Hook thread** | The imperative-shell thread running the message loop and hook callbacks (the hot path)            | worker, input thread       |
 | **Eviction**    | Windows silently dropping a hook it judged too slow                                               | timeout, drop, disconnect  |
 | **Watchdog**    | The mechanism that detects eviction and reinstalls the hook                                       | monitor, healthcheck       |
-| **HookBackend** | The per-OS trait the platform layer implements; the seam for future macOS/Linux support           | platform driver, adapter   |
+| **HookBackend** | The per-OS trait the platform layer implements (Windows hooks, Linux grab+replay); the seam for future macOS support | platform driver, adapter |
+| **Grab**        | Linux: the exclusive `EVIOCGRAB` claim on a device, so its events reach only Bouncer              | capture, lock, take        |
+| **Replay**      | Linux: re-emitting a passed event on Bouncer's `uinput` virtual device, which the desktop reads   | forward, re-inject, mirror |
 | **Command / Report** | The channel messages between threads: Commands flow UI→hook, Reports flow hook→UI            | message, event (overloaded)|
 
 ## Observability & privacy

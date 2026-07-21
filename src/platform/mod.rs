@@ -13,7 +13,8 @@ use std::sync::mpsc::{Receiver, Sender};
 /// one backend and failures are terminal, so a structured type would buy nothing yet.
 pub type BackendError = String;
 
-/// An OS input-hook backend. One implementation per platform; only `windows` for v1.
+/// An OS input-hook backend. One implementation per platform: `windows` (low-level
+/// hooks) and `linux` (evdev grab + uinput replay).
 pub trait HookBackend {
     /// Install hooks and run the OS message loop on the calling thread until a
     /// `Command::Shutdown` is received. Applies `Command`s to `engine` between
@@ -28,6 +29,11 @@ pub trait HookBackend {
 
 #[cfg(windows)]
 pub mod autostart;
+/// Pure evdev-code -> `KeyCode` translation. OS-free (the codes are just numbers),
+/// so it compiles and tests everywhere; only `linux.rs` calls it.
+pub mod evdev_keycode;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(windows)]
 pub mod single_instance;
 /// Pure hook-eviction watchdog policy — OS-free, so it compiles and tests on every

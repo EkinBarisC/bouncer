@@ -6,7 +6,7 @@ name = "input-bouncer"
 version = "1.0.1"
 edition = "2021"
 rust-version = "1.92"
-description = "Headless input debouncer for Windows — suppresses keyboard & mouse chatter"
+description = "Headless input debouncer for Windows & Linux — suppresses keyboard & mouse chatter"
 license = "MIT"
 repository = "https://github.com/EkinBarisC/bouncer"
 keywords = ["debounce", "keyboard", "mouse", "chatter", "windows"]
@@ -45,6 +45,13 @@ strip = true
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[target."cfg(target_os = \"linux\")".dependencies]
+# The Linux backend grabs real devices with EVIOCGRAB and replays through uinput;
+# `libc` is only for the `poll(2)` over the grabbed fds (evdev has no sync
+# multi-device wait of its own).
+evdev = "0.13.2"
+libc = "0.2"
 
 [target."cfg(windows)".build-dependencies]
 # Embeds assets/icon.ico into the exe so Explorer / taskbar / title bar show the

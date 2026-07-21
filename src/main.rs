@@ -63,7 +63,55 @@ fn main() {
     let _ = backend.join();
 }
 
-#[cfg(not(windows))]
+/// Linux: headless daemon. Same core, same config file, no tray and no Settings
+/// window yet — the debouncer runs in the foreground until it is killed, and
+/// settings are edited in `config.toml`. The backend owns the main thread; a small
+/// reader thread drains `Report`s so the channel can't grow unbounded.
+///
+/// Killing the process (Ctrl-C, SIGTERM, or a crash) closes the device fds, which
+/// releases the kernel grabs — so there is no shutdown handshake to get wrong and
+/// no way to leave the machine without a keyboard.
+#[cfg(target_os = "linux")]
 fn main() {
-    eprintln!("bouncer: Windows-only; this platform is a build stub.");
+    use std::sync::mpsc;
+    use std::thread;
+
+    use bouncer::config::Config;
+    use bouncer::core::Engine;
+    use bouncer::messages::Report;
+    use bouncer::platform::linux::LinuxBackend;
+    use bouncer::platform::HookBackend;
+
+    let cfg = Config::config_path()
+        .map(|p| Config::load_from_path(&p))
+        .unwrap_or_default();
+
+    let mut engine = Engine::new();
+    engine.set_thresholds(cfg.thresholds());
+    engine.set_mode(cfg.initial_mode());
+    engine.set_panic_chord(cfg.panic_hotkey.clone());
+
+    let (_cmd_tx, cmd_rx) = mpsc::channel();
+    let (rep_tx, rep_rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        for report in rep_rx {
+            // Suppressions are far too frequent to log one-by-one; the mode toggle
+            // is the one thing a headless user needs to see confirmed.
+            if let Report::ModeChanged(mode) = report {
+                eprintln!("bouncer: {mode:?}");
+            }
+        }
+    });
+
+    eprintln!("bouncer: watching for chatter (Ctrl-C to stop)");
+    if let Err(e) = LinuxBackend::new().run(engine, cmd_rx, rep_tx) {
+        eprintln!("bouncer: {e}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn main() {
+    eprintln!("bouncer: Windows and Linux only; this platform is a build stub.");
 }

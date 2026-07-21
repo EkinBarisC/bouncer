@@ -4,7 +4,8 @@
 
 # Bouncer
 
-A headless, tray-resident **input debouncer** for Windows. It suppresses keyboard *and* mouse
+A headless **input debouncer** — tray-resident on Windows, a background daemon on Linux.
+It suppresses keyboard *and* mouse
 **chatter** — repeat events that fire faster than humanly possible (worn switch bounce, the
 mouse double-click bug) — while never touching your legitimate input.
 
@@ -37,6 +38,13 @@ double-clicks are unaffected by design.
 - **Mouse threshold:** default 40 ms (the double-click bug)
 - **Panic hotkey:** `Ctrl+Alt+Shift+F12` (rebindable) instantly drops Bouncer into full
   pass-through if anything ever feels off.
+
+On **Linux** the same engine runs behind a different mechanism, because no Linux API lets a
+program veto an input event: Bouncer takes an exclusive `evdev` grab on your keyboard and mouse
+and replays the surviving events on a `uinput` virtual device, so chatter is suppressed simply by
+never being replayed. It runs as your own user (no root) and releases every device the instant
+the process exits. See [packaging/linux/README.md](packaging/linux/README.md) for setup and
+[ADR-0002](docs/adr/0002-linux-suppression-by-evdev-grab-and-uinput-replay.md) for the reasoning.
 
 ## Features
 
@@ -83,7 +91,8 @@ just the shape of this category. Bouncer is unsigned, so Windows SmartScreen may
 
 ## Building
 
-Requires a stable Rust toolchain (1.92+) on Windows.
+Requires a stable Rust toolchain (1.92+) on Windows or Linux. The Linux build additionally
+needs the setup in [packaging/linux/README.md](packaging/linux/README.md) before it can run.
 
 ```sh
 cargo build --release   # binary in target/release/bouncer.exe
@@ -112,10 +121,14 @@ platform/UI shell. New behavior is built test-first.
 
 ## Status
 
-Core engine, Windows keyboard + mouse backends, tray, settings window, diagnostics, and the
-hardening layer (panic hotkey, fail-open, eviction watchdog, single-instance) are implemented.
-Remaining before a tagged release: packaging a portable `.exe` and GitHub Releases with SHA256
-checksums. See [DESIGN.md](DESIGN.md) §12 for the milestone map.
+Windows is complete and released: core engine, keyboard + mouse backends, tray, settings window,
+diagnostics, and the hardening layer (panic hotkey, fail-open, eviction watchdog,
+single-instance).
+
+Linux is new and runs headless — the evdev/uinput backend, config file, and panic hotkey work;
+the tray and Settings window are not ported yet, and devices are enumerated once at startup (no
+hotplug). It has been type-checked and unit-tested in CI but not yet exercised on real hardware,
+so treat it as beta. macOS is not started. See [DESIGN.md](DESIGN.md) §12 for the milestone map.
 
 ## License
 

@@ -1,0 +1,9 @@
+# Let members of the `input` group write to /dev/uinput, so Bouncer can create its
+# virtual input device without running as root.
+#
+# `/dev/input/event*` is already group `input` on every mainstream distro, so this
+# rule plus membership of that group is all the access Bouncer needs.
+#
+# `static_node` makes the node exist with these permissions even before the uinput
+# module is loaded, so the daemon can open it on a cold boot.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

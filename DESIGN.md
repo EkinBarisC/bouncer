@@ -8,7 +8,8 @@
 > the app *de-bounces* the input stream.
 
 **Status:** core + Windows backends + tray/settings/diagnostics/hardening implemented; packaging and release pending (see §12).
-**Platform:** Windows-only for v1 (cross-platform architecture in place, other OSes deferred).
+**Platform:** Windows (full tray app) and Linux (headless daemon, see
+[ADR-0002](docs/adr/0002-linux-suppression-by-evdev-grab-and-uinput-replay.md)); macOS deferred.
 **Language:** Rust. **UI:** egui/eframe. **License/source:** open source.
 
 ---
@@ -45,8 +46,9 @@ two device classes (keyboard + mouse), one timing-based algorithm.
 - **Controllers / gamepads** — not routed through `WH_*_LL`; would need a virtual-device
   driver (e.g. ViGEm) + re-emission. Also, the common controller defect (stick drift) is an
   *analog* problem, not a discrete double-fire you can debounce.
-- **macOS / Linux implementations** — architecture is ready behind the hook trait, but not built.
-  (macOS: `CGEventTap`; Linux: `evdev` + `uinput` virtual device.)
+- **macOS implementation** — architecture is ready behind the hook trait, but not built
+  (`CGEventTap`). Linux landed in v2 as a headless daemon; its tray + Settings UI is
+  still deferred.
 - **Code-signing certificate** — no budget for v1; SmartScreen warning documented instead.
 - **Per-key thresholds** — single global threshold per device class is enough.
 - **Installer / MSI** — portable single `.exe` instead.
@@ -71,6 +73,7 @@ two device classes (keyboard + mouse), one timing-based algorithm.
 | D11 | TOML config in `%APPDATA%\Bouncer\config.toml`; defensive load | The single disk artifact; contains only settings, zero sensitive data. |
 | D12 | Production **ignores injected events**; test-only mode processes them | Chatter is physical; injected events (remappers, macro tools) are never chatter. Test mode enables `SendInput`-driven integration tests. |
 | D13 | Distribution: unsigned portable `.exe` + GitHub Releases + SHA256; signing deferred | No budget for certs. Open source + "build it yourself" + README disclosure mitigate the SmartScreen speed-bump. |
+| D14 | Linux suppresses by **exclusive `evdev` grab + `uinput` replay**, headless first | No OS hook can veto an event on Linux; interposition is the only way (see [ADR-0002](docs/adr/0002-linux-suppression-by-evdev-grab-and-uinput-replay.md)). The tray/Settings UI is a separate milestone, so the risky device layer lands on its own. |
 
 ---
 
